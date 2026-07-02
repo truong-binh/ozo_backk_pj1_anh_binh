@@ -17,6 +17,10 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/test', (req, res) => {
+  res.status(200).json({ message: 'ok' });
+});
+
 app.use('/api/projects', projectRoutes);
 
 app.use((error, req, res, next) => {
