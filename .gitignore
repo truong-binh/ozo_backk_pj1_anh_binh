@@ -1,0 +1,34 @@
+# Root
+node_modules/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/node_modules/
+backend/dist/
+
+# Env
+.env
+frontend/.env
+backend/.env
+
+# Logs
+*.log
+
+# Prisma
+backend/prisma/dev.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+coverage/
+.cache/
+
+# Docker
+postgres-data/
+redis-data/
+minio-data/
