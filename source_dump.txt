@@ -1,0 +1,592 @@
+# ==================================================
+# Path: D:\CODE\ozovn_feelex\backend
+# Detected tech: javascript, typescript
+# ==================================================
+
+## DIRECTORY STRUCTURE
+```
+backend/
+├── .git/
+├── node_modules/
+├── src/
+│   ├── config/
+│   │   ├── env.js
+│   │   └── supabaseClient.js
+│   ├── constants/
+│   │   └── workflowNodes.js
+│   ├── controllers/
+│   │   └── projectController.js
+│   ├── routes/
+│   │   └── projectRoutes.js
+│   ├── services/
+│   │   └── projectService.js
+│   ├── utils/
+│   │   └── asyncHandler.js
+│   ├── app.js
+│   └── server.js
+├── .env
+├── .env.example
+├── .gitignore
+├── index.js
+├── package-lock.json
+└── package.json
+```
+
+## FILE CONTENTS
+
+### index.js
+```js
+require('./src/server');
+
+
+```
+
+### src\app.js
+```js
+const express = require('express');
+const cors = require('cors');
+const { nodeEnv } = require('./config/env');
+const { isConfigured } = require('./config/supabaseClient');
+const { projectRoutes } = require('./routes/projectRoutes');
+
+const app = express();
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json());
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    env: nodeEnv,
+    supabaseConfigured: isConfigured,
+  });
+});
+
+app.use('/api/projects', projectRoutes);
+
+app.use((error, req, res, next) => {
+  console.error(error);
+  res.status(500).json({ error: error.message || 'Internal server error' });
+});
+
+module.exports = { app };
+
+
+```
+
+### src\server.js
+```js
+const { app } = require('./app');
+const { port } = require('./config/env');
+
+app.listen(port, () => {
+  console.log(`Backend listening on http://localhost:${port}`);
+});
+
+
+```
+
+### src\config\env.js
+```js
+require('dotenv').config();
+
+module.exports = {
+  port: Number(process.env.PORT || 4000),
+  nodeEnv: process.env.NODE_ENV || 'development',
+  supabaseUrl: process.env.SUPABASE_URL || '',
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+};
+
+
+```
+
+### src\config\supabaseClient.js
+```js
+const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
+const { supabaseUrl, supabaseServiceRoleKey } = require('./env');
+
+const isConfigured = Boolean(supabaseUrl && supabaseServiceRoleKey);
+
+let cachedClient = null;
+
+function getSupabaseClient() {
+  if (!isConfigured) {
+    throw new Error(
+      'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in backend/.env',
+    );
+  }
+
+  if (cachedClient) {
+    return cachedClient;
+  }
+
+  cachedClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: { persistSession: false },
+    realtime: {
+      transport: WebSocket,
+    },
+  });
+
+  return cachedClient;
+}
+
+module.exports = { getSupabaseClient, isConfigured };
+
+
+```
+
+### src\constants\workflowNodes.js
+```js
+const WORKFLOW_NODES = [
+  { code: 'A1', stage: 'A. Y tuong & Duyet', name: 'Phe duyet trien khai du an', dept: 'RD', defaultDuration: 15, defaultAfter: [] },
+  { code: 'B1', stage: 'B. Nghien cuu bao che', name: 'Chuan bi nguyen lieu nghien cuu', dept: 'PP', defaultDuration: 15, defaultAfter: ['A1'] },
+  { code: 'B2', stage: 'B. Nghien cuu bao che', name: 'Nghien cuu bao che', dept: 'RD', defaultDuration: 15, defaultAfter: ['B1'] },
+  { code: 'B3', stage: 'B. Nghien cuu bao che', name: 'Danh gia cam quan', dept: 'RD', defaultDuration: 3, defaultAfter: ['B2'] },
+  { code: 'B4', stage: 'B. Nghien cuu bao che', name: 'Danh gia tac dung so bo', dept: 'RD', defaultDuration: 15, defaultAfter: ['B2'] },
+  { code: 'B5', stage: 'B. Nghien cuu bao che', name: 'Chot mau nghien cuu', dept: 'BGD', defaultDuration: 3, defaultAfter: ['B3', 'B4'] },
+  { code: 'B6', stage: 'B. Nghien cuu bao che', name: 'Theo doi su on dinh', dept: 'RD', defaultDuration: 60, defaultAfter: ['B5'] },
+  { code: 'B7', stage: 'B. Nghien cuu bao che', name: 'Order pha mau nha may', dept: 'RD', defaultDuration: 1, defaultAfter: ['B5'] },
+  { code: 'B8', stage: 'B. Nghien cuu bao che', name: 'Xay dung ho so san pham du kien', dept: 'RD', defaultDuration: 3, defaultAfter: ['B5'] },
+  { code: 'C1', stage: 'C. Bao bi', name: 'Mau bao bi', dept: 'PP', defaultDuration: 7, defaultAfter: ['A1'] },
+  { code: 'C2', stage: 'C. Bao bi', name: 'Y tuong thiet ke', dept: 'TK', defaultDuration: 7, defaultAfter: ['B5'] },
+  { code: 'C3', stage: 'C. Bao bi', name: 'Thiet ke bao bi', dept: 'TK', defaultDuration: 7, defaultAfter: ['E1'] },
+  { code: 'C4', stage: 'C. Bao bi', name: 'Thiet ke duyet in', dept: 'TK', defaultDuration: 3, defaultAfter: ['E2'] },
+  { code: 'D1', stage: 'D. Kha thi san xuat', name: 'Danh gia kha thi cong bo', dept: 'PC-DV', defaultDuration: 5, defaultAfter: ['B8'] },
+  { code: 'D2', stage: 'D. Kha thi san xuat', name: 'Danh gia kha thi san xuat', dept: 'NCC', defaultDuration: 5, defaultAfter: ['B7'] },
+  { code: 'D3', stage: 'D. Kha thi san xuat', name: 'Pha mau va sua mau', dept: 'NCC', defaultDuration: 20, defaultAfter: ['D2'] },
+  { code: 'D4', stage: 'D. Kha thi san xuat', name: 'Phe duyet NCC gia cong', dept: 'PP', defaultDuration: 7, defaultAfter: ['D3'] },
+  { code: 'D5', stage: 'D. Kha thi san xuat', name: 'Theo doi do on dinh chinh thuc tai nha may', dept: 'NCC', defaultDuration: 90, defaultAfter: ['D4'] },
+  { code: 'E1', stage: 'E. Cong bo', name: 'Soan ho so cong bo', dept: 'PC-DV', defaultDuration: 7, defaultAfter: ['D4'] },
+  { code: 'E2', stage: 'E. Cong bo', name: 'Duyet ho so', dept: '', defaultDuration: 15, defaultAfter: ['E1', 'C3'] },
+  { code: 'E3', stage: 'E. Cong bo', name: 'Dang ky quang cao', dept: 'PC', defaultDuration: 20, defaultAfter: ['E2'] },
+  { code: 'F1', stage: 'F. Ra mat & Truyen thong', name: 'Dao tao san pham', dept: 'RD', defaultDuration: 7, defaultAfter: ['E2'] },
+  { code: 'F2', stage: 'F. Ra mat & Truyen thong', name: 'Chuan bi launching', dept: 'Sale', defaultDuration: 30, defaultAfter: ['F1'] },
+  { code: 'G1', stage: 'G. San xuat lo dau', name: 'Xay dung tai lieu san xuat', dept: 'RD', defaultDuration: 7, defaultAfter: ['C4', 'E2'] },
+  { code: 'G2', stage: 'G. San xuat lo dau', name: 'San xuat lo dau va kiem nghiem', dept: 'PP', defaultDuration: 60, defaultAfter: ['G1'] },
+  { code: 'G3', stage: 'G. San xuat lo dau', name: 'Kiem tra cam quan mau', dept: 'RD', defaultDuration: 2, defaultAfter: ['G2'] },
+  { code: 'G4', stage: 'G. San xuat lo dau', name: 'Nhap kho', dept: 'PP', defaultDuration: 3, defaultAfter: ['G3'] },
+];
+
+const NODE_INDEX = Object.fromEntries(WORKFLOW_NODES.map((node) => [node.code, node]));
+
+module.exports = { WORKFLOW_NODES, NODE_INDEX };
+
+
+```
+
+### src\controllers\projectController.js
+```js
+const {
+  listProjects,
+  listProjectsWithNodes,
+  getProjectDetail,
+  createProject,
+  updateProject,
+  deleteProject,
+  updateProjectNode,
+  seedFromJsonFile,
+  seedFromPayload,
+} = require('../services/projectService');
+
+async function getProjects(req, res) {
+  const data = await listProjects();
+  res.json(data);
+}
+
+async function getProjectById(req, res) {
+  const projectId = Number(req.params.projectId);
+  const data = await getProjectDetail(projectId);
+  res.json(data);
+}
+
+async function getProjectsWithNodes(req, res) {
+  const data = await listProjectsWithNodes();
+  res.json(data);
+}
+
+async function postProject(req, res) {
+  const { code, name, type, product_group, owner, start_date } = req.body || {};
+  if (!code || !name || !type || !start_date) {
+    return res
+      .status(400)
+      .json({ error: 'code, name, type, start_date là bắt buộc' });
+  }
+
+  const created = await createProject({
+    code,
+    name,
+    type,
+    product_group: product_group || null,
+    owner: owner || null,
+    start_date,
+  });
+  res.status(201).json(created);
+}
+
+async function patchProject(req, res) {
+  const projectId = Number(req.params.projectId);
+  const payload = req.body || {};
+  const updated = await updateProject(projectId, payload);
+  res.json(updated);
+}
+
+async function removeProject(req, res) {
+  const projectId = Number(req.params.projectId);
+  const result = await deleteProject(projectId);
+  res.json(result);
+}
+
+async function patchProjectNode(req, res) {
+  const projectId = Number(req.params.projectId);
+  const nodeId = req.params.nodeId;
+  const payload = req.body || {};
+  const data = await updateProjectNode(projectId, nodeId, payload);
+  res.json(data);
+}
+
+async function seedProjects(req, res) {
+  const defaultPath = 'o:/06-RnD/QuanLyDuAn/feelex-data.json';
+  const targetPath = req.body?.jsonPath || process.env.SEED_JSON_PATH || defaultPath;
+  const result = await seedFromJsonFile(targetPath);
+  res.json({ ok: true, ...result });
+}
+
+async function seedProjectsFromPayload(req, res) {
+  const payload = req.body || {};
+  const projects = Array.isArray(payload.projects) ? payload.projects : [];
+  const result = await seedFromPayload(projects);
+  res.json({ ok: true, ...result });
+}
+
+module.exports = {
+  getProjects,
+  getProjectsWithNodes,
+  getProjectById,
+  postProject,
+  patchProject,
+  removeProject,
+  patchProjectNode,
+  seedProjects,
+  seedProjectsFromPayload,
+};
+
+
+```
+
+### src\routes\projectRoutes.js
+```js
+const express = require('express');
+const { asyncHandler } = require('../utils/asyncHandler');
+const {
+  getProjects,
+  getProjectsWithNodes,
+  getProjectById,
+  postProject,
+  patchProject,
+  removeProject,
+  patchProjectNode,
+  seedProjects,
+  seedProjectsFromPayload,
+} = require('../controllers/projectController');
+
+const router = express.Router();
+
+router.get('/', asyncHandler(getProjects));
+router.get('/with-nodes', asyncHandler(getProjectsWithNodes));
+router.post('/seed/from-payload', asyncHandler(seedProjectsFromPayload));
+router.post('/', asyncHandler(postProject));
+router.patch('/:projectId', asyncHandler(patchProject));
+router.delete('/:projectId', asyncHandler(removeProject));
+router.get('/:projectId', asyncHandler(getProjectById));
+router.patch('/:projectId/nodes/:nodeId', asyncHandler(patchProjectNode));
+router.post('/seed/from-json', asyncHandler(seedProjects));
+
+module.exports = { projectRoutes: router };
+
+
+```
+
+### src\services\projectService.js
+```js
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { getSupabaseClient } = require('../config/supabaseClient');
+const { WORKFLOW_NODES, NODE_INDEX } = require('../constants/workflowNodes');
+
+async function ensureMasterNodes() {
+  const supabase = getSupabaseClient();
+  const rows = WORKFLOW_NODES.map((node) => ({
+    code: node.code,
+    stage: node.stage,
+    name: node.name,
+    dept: node.dept,
+    default_duration: node.defaultDuration,
+    default_after: node.defaultAfter,
+  }));
+
+  const { error } = await supabase
+    .from('master_nodes')
+    .upsert(rows, { onConflict: 'code' });
+
+  if (error) throw error;
+}
+
+async function listProjects() {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id,code,name,type,product_group,owner,start_date')
+    .order('start_date', { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+async function getProjectDetail(projectId) {
+  const supabase = getSupabaseClient();
+  const { data: project, error: projectError } = await supabase
+    .from('projects')
+    .select('*')
+    .eq('id', projectId)
+    .single();
+  if (projectError) throw projectError;
+
+  const { data: nodes, error: nodesError } = await supabase
+    .from('project_nodes')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('node_id', { ascending: true });
+  if (nodesError) throw nodesError;
+  const { data: masterNodes, error: masterError } = await supabase
+    .from('master_nodes')
+    .select('code,name,stage')
+    .order('code', { ascending: true });
+  if (masterError) throw masterError;
+
+  const masterMap = Object.fromEntries((masterNodes ?? []).map((item) => [item.code, item]));
+  const mergedNodes = (nodes ?? []).map((node) => ({
+    ...node,
+    node_name: masterMap[node.node_id]?.name || node.node_id,
+    stage: masterMap[node.node_id]?.stage || node.node_id.charAt(0),
+  }));
+
+  return { project, nodes: mergedNodes };
+}
+
+async function updateProjectNode(projectId, nodeId, payload) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('project_nodes')
+    .update(payload)
+    .eq('project_id', projectId)
+    .eq('node_id', nodeId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function listProjectsWithNodes() {
+  const supabase = getSupabaseClient();
+
+  const { data: projects, error: projectsError } = await supabase
+    .from('projects')
+    .select('id,code,name,type,product_group,owner,start_date')
+    .order('start_date', { ascending: true });
+  if (projectsError) throw projectsError;
+
+  const ids = (projects ?? []).map((p) => p.id);
+  if (ids.length === 0) return [];
+
+  const { data: nodes, error: nodesError } = await supabase
+    .from('project_nodes')
+    .select('*')
+    .in('project_id', ids)
+    .order('project_id', { ascending: true })
+    .order('node_id', { ascending: true });
+  if (nodesError) throw nodesError;
+
+  const { data: masterNodes, error: masterError } = await supabase
+    .from('master_nodes')
+    .select('code,name,stage')
+    .order('code', { ascending: true });
+  if (masterError) throw masterError;
+
+  const masterMap = Object.fromEntries(
+    (masterNodes ?? []).map((item) => [item.code, item]),
+  );
+
+  const nodesByProjectId = new Map();
+  for (const node of nodes ?? []) {
+    const enriched = {
+      ...node,
+      node_name: masterMap[node.node_id]?.name || node.node_id,
+      stage: masterMap[node.node_id]?.stage || node.node_id.charAt(0),
+    };
+    if (!nodesByProjectId.has(node.project_id)) nodesByProjectId.set(node.project_id, []);
+    nodesByProjectId.get(node.project_id).push(enriched);
+  }
+
+  return (projects ?? []).map((p) => ({
+    project: p,
+    nodes: nodesByProjectId.get(p.id) ?? [],
+  }));
+}
+
+async function createProject(payload) {
+  const supabase = getSupabaseClient();
+
+  await ensureMasterNodes();
+
+  const { data: project, error: projectError } = await supabase
+    .from('projects')
+    .insert([payload])
+    .select('*')
+    .single();
+  if (projectError) throw projectError;
+
+  const { data: masterNodes, error: masterError } = await supabase
+    .from('master_nodes')
+    .select('*')
+    .order('code', { ascending: true });
+  if (masterError) throw masterError;
+
+  const rows = (masterNodes ?? []).map((n) => ({
+    project_id: project.id,
+    node_id: n.code,
+    status: 'Chưa làm',
+    pic: '',
+    duration: n.default_duration,
+    actual_date: null,
+    notes: '',
+    dept: n.dept,
+    after: n.default_after || [],
+    attachments: [],
+  }));
+
+  if (rows.length) {
+    const { error: nodesError } = await supabase.from('project_nodes').insert(rows);
+    if (nodesError) throw nodesError;
+  }
+
+  return project;
+}
+
+async function updateProject(projectId, payload) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('projects')
+    .update(payload)
+    .eq('id', projectId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function deleteProject(projectId) {
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('projects').delete().eq('id', projectId);
+  if (error) throw error;
+  return { ok: true };
+}
+
+async function upsertProjectFromJsonRow(projectJson) {
+  const supabase = getSupabaseClient();
+
+  const projectPayload = {
+    code: projectJson.id,
+    name: projectJson.name,
+    type: projectJson.type,
+    product_group: projectJson.group || null,
+    owner: projectJson.owner || null,
+    start_date: projectJson.startDate,
+  };
+
+  const { data: project, error: projectError } = await supabase
+    .from('projects')
+    .upsert([projectPayload], { onConflict: 'code' })
+    .select('*')
+    .single();
+  if (projectError) throw projectError;
+
+  const nodes = Object.entries(projectJson.nodes || {}).map(([nodeId, nodeData]) => {
+    const nodeMeta = NODE_INDEX[nodeId];
+    return {
+      project_id: project.id,
+      node_id: nodeId,
+      status: nodeData.status || 'Chua lam',
+      pic: nodeData.pic || '',
+      duration:
+        typeof nodeData.duration === 'number'
+          ? nodeData.duration
+          : nodeMeta?.defaultDuration || 1,
+      actual_date: nodeData.actualDate || null,
+      notes: nodeData.notes || '',
+      dept: nodeData.dept || nodeMeta?.dept || null,
+      after: Array.isArray(nodeData.after) ? nodeData.after : nodeMeta?.defaultAfter || [],
+      attachments: Array.isArray(nodeData.attachments) ? nodeData.attachments : [],
+    };
+  });
+
+  if (nodes.length > 0) {
+    const { error: nodesError } = await supabase
+      .from('project_nodes')
+      .upsert(nodes, { onConflict: 'project_id,node_id' });
+    if (nodesError) throw nodesError;
+  }
+
+  return project;
+}
+
+async function seedFromJsonFile(jsonFilePath) {
+  const fullPath = path.resolve(jsonFilePath);
+  const content = await fs.readFile(fullPath, 'utf8');
+  const parsed = JSON.parse(content);
+  const projects = parsed.projects || [];
+
+  await ensureMasterNodes();
+  for (const project of projects) {
+    await upsertProjectFromJsonRow(project);
+  }
+
+  return { total: projects.length, path: fullPath };
+}
+
+async function seedFromPayload(projects) {
+  const safeProjects = Array.isArray(projects) ? projects : [];
+  await ensureMasterNodes();
+  for (const project of safeProjects) {
+    await upsertProjectFromJsonRow(project);
+  }
+  return { total: safeProjects.length };
+}
+
+module.exports = {
+  ensureMasterNodes,
+  listProjects,
+  listProjectsWithNodes,
+  getProjectDetail,
+  createProject,
+  updateProject,
+  deleteProject,
+  updateProjectNode,
+  seedFromJsonFile,
+  seedFromPayload,
+};
+
+
+```
+
+### src\utils\asyncHandler.js
+```js
+function asyncHandler(fn) {
+  return function wrappedHandler(req, res, next) {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
+module.exports = { asyncHandler };
+
+
+```
