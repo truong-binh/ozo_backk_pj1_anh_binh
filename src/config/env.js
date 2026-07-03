@@ -23,9 +23,11 @@ module.exports = {
   // Mã bí mật chung để PIC nâng quyền lên Quản lý (sửa tất cả)
   managerCode: (process.env.MANAGER_CODE || '').trim(),
 
-  // Lark (Feishu) custom app
-  larkAppId: process.env.LARK_APP_ID || '',
-  larkAppSecret: process.env.LARK_APP_SECRET || '',
-  // open.larksuite.com cho Lark quốc tế; open.feishu.cn cho Feishu (TQ)
-  larkBaseUrl: process.env.LARK_BASE_URL || 'https://open.larksuite.com',
+  // SMTP để gửi mã OTP qua email
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpSecure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  mailFrom: process.env.MAIL_FROM || '',
 };

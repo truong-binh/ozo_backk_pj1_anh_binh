@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { nodeEnv } = require('./config/env');
 const { isConfigured } = require('./config/supabaseClient');
-const { isLarkConfigured } = require('./config/lark');
+const { isMailConfigured } = require('./config/mailer');
 const { projectRoutes } = require('./routes/projectRoutes');
 const { authRoutes } = require('./routes/authRoutes');
 const { requireAuth } = require('./middleware/auth');
@@ -17,7 +17,7 @@ app.get('/health', (req, res) => {
     ok: true,
     env: nodeEnv,
     supabaseConfigured: isConfigured,
-    larkConfigured: isLarkConfigured,
+    mailConfigured: isMailConfigured,
   });
 });
 

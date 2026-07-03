@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { getSupabaseClient } = require('../config/supabaseClient');
-const { isLarkConfigured, sendLoginCode } = require('../config/lark');
+const { isMailConfigured, sendLoginCode } = require('../config/mailer');
 const {
   jwtSecret,
   jwtExpiresIn,
@@ -83,11 +83,11 @@ async function requestLoginCode(rawEmail) {
   ]);
   if (error) throw error;
 
-  let delivered = 'lark';
-  if (isLarkConfigured) {
+  let delivered = 'email';
+  if (isMailConfigured) {
     await sendLoginCode(email, code);
   } else {
-    // Chế độ dev: chưa cấu hình Lark -> in mã ra console để test.
+    // Chế độ dev: chưa cấu hình SMTP -> in mã ra console để test.
     delivered = 'console';
     console.log(`\n[DEV OTP] Mã đăng nhập cho ${email}: ${code}\n`);
   }
