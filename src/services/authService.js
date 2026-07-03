@@ -1,0 +1,236 @@
+const crypto = require('node:crypto');
+const jwt = require('jsonwebtoken');
+const { getSupabaseClient } = require('../config/supabaseClient');
+const { isLarkConfigured, sendLoginCode } = require('../config/lark');
+const {
+  jwtSecret,
+  jwtExpiresIn,
+  otpTtlMinutes,
+  otpMaxAttempts,
+  allowedEmailDomain,
+  managerCode,
+} = require('../config/env');
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Vai trò cơ bản khi đăng nhập: PIC (nếu email nằm trong pic_members) hoặc viewer.
+async function resolveRole(email) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('pic_members')
+    .select('pic_name')
+    .eq('email', normalizeEmail(email))
+    .maybeSingle();
+  if (error) throw error;
+  if (data && data.pic_name) {
+    return { role: 'PIC', picName: data.pic_name };
+  }
+  return { role: 'viewer', picName: null };
+}
+
+function hashCode(email, code) {
+  return crypto
+    .createHmac('sha256', jwtSecret)
+    .update(`${email}:${code}`)
+    .digest('hex');
+}
+
+function generateCode() {
+  // 6 chữ số, không bắt đầu bằng 0 để luôn đủ 6 ký tự
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+// Bước 1: yêu cầu mã đăng nhập -> gửi qua Lark (hoặc log ở dev).
+async function requestLoginCode(rawEmail) {
+  const email = normalizeEmail(rawEmail);
+  if (!isValidEmail(email)) {
+    const err = new Error('Email không hợp lệ');
+    err.status = 400;
+    throw err;
+  }
+  if (allowedEmailDomain && !email.endsWith(`@${allowedEmailDomain}`)) {
+    const err = new Error(`Chỉ chấp nhận email @${allowedEmailDomain}`);
+    err.status = 403;
+    throw err;
+  }
+
+  const supabase = getSupabaseClient();
+  const code = generateCode();
+  const codeHash = hashCode(email, code);
+  const expiresAt = new Date(Date.now() + otpTtlMinutes * 60_000).toISOString();
+
+  // Vô hiệu các mã cũ chưa dùng của email này.
+  await supabase
+    .from('login_codes')
+    .update({ consumed: true })
+    .eq('email', email)
+    .eq('consumed', false);
+
+  const { error } = await supabase.from('login_codes').insert([
+    {
+      email,
+      code_hash: codeHash,
+      expires_at: expiresAt,
+      consumed: false,
+      attempts: 0,
+    },
+  ]);
+  if (error) throw error;
+
+  let delivered = 'lark';
+  if (isLarkConfigured) {
+    await sendLoginCode(email, code);
+  } else {
+    // Chế độ dev: chưa cấu hình Lark -> in mã ra console để test.
+    delivered = 'console';
+    console.log(`\n[DEV OTP] Mã đăng nhập cho ${email}: ${code}\n`);
+  }
+
+  return { ok: true, delivered, ttlMinutes: otpTtlMinutes };
+}
+
+// Bước 2: xác thực mã -> tạo/cập nhật user, phát JWT.
+async function verifyLoginCode(rawEmail, rawCode) {
+  const email = normalizeEmail(rawEmail);
+  const code = String(rawCode || '').trim();
+  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
+    const err = new Error('Email hoặc mã không hợp lệ');
+    err.status = 400;
+    throw err;
+  }
+
+  const supabase = getSupabaseClient();
+  const { data: rows, error } = await supabase
+    .from('login_codes')
+    .select('*')
+    .eq('email', email)
+    .eq('consumed', false)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+
+  const record = rows && rows[0];
+  if (!record) {
+    const err = new Error('Chưa yêu cầu mã hoặc mã đã dùng. Vui lòng lấy mã mới.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (new Date(record.expires_at).getTime() < Date.now()) {
+    await supabase.from('login_codes').update({ consumed: true }).eq('id', record.id);
+    const err = new Error('Mã đã hết hạn. Vui lòng lấy mã mới.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (record.attempts >= otpMaxAttempts) {
+    await supabase.from('login_codes').update({ consumed: true }).eq('id', record.id);
+    const err = new Error('Nhập sai quá số lần cho phép. Vui lòng lấy mã mới.');
+    err.status = 429;
+    throw err;
+  }
+
+  const ok = crypto.timingSafeEqual(
+    Buffer.from(record.code_hash),
+    Buffer.from(hashCode(email, code)),
+  );
+  if (!ok) {
+    await supabase
+      .from('login_codes')
+      .update({ attempts: record.attempts + 1 })
+      .eq('id', record.id);
+    const err = new Error('Mã không đúng');
+    err.status = 400;
+    throw err;
+  }
+
+  // Đúng mã -> tiêu thụ mã.
+  await supabase.from('login_codes').update({ consumed: true }).eq('id', record.id);
+
+  const { role, picName } = await resolveRole(email);
+
+  // Upsert user, ghi lại vai trò + tên PIC + thời điểm đăng nhập.
+  const { data: user, error: upsertError } = await supabase
+    .from('app_users')
+    .upsert(
+      { email, role, name: picName, last_login_at: new Date().toISOString() },
+      { onConflict: 'email' },
+    )
+    .select('*')
+    .single();
+  if (upsertError) throw upsertError;
+
+  const token = jwt.sign(
+    { sub: user.id, email: user.email, role, picName },
+    jwtSecret,
+    { expiresIn: jwtExpiresIn },
+  );
+
+  return {
+    token,
+    user: { id: user.id, email: user.email, role, picName },
+  };
+}
+
+// Nâng quyền lên Quản lý bằng mã bí mật chung -> phát JWT mới role='manager'.
+function elevateToManager(currentUser, code) {
+  if (!managerCode) {
+    const err = new Error('Mã quản lý chưa được cấu hình trên máy chủ');
+    err.status = 400;
+    throw err;
+  }
+  if (String(code || '').trim() !== managerCode) {
+    const err = new Error('Mã quản lý không đúng');
+    err.status = 403;
+    throw err;
+  }
+  const token = jwt.sign(
+    {
+      sub: currentUser.id,
+      email: currentUser.email,
+      role: 'manager',
+      picName: currentUser.picName || null,
+    },
+    jwtSecret,
+    { expiresIn: jwtExpiresIn },
+  );
+  return {
+    token,
+    user: {
+      id: currentUser.id,
+      email: currentUser.email,
+      role: 'manager',
+      picName: currentUser.picName || null,
+    },
+  };
+}
+
+function verifyToken(token) {
+  return jwt.verify(token, jwtSecret);
+}
+
+async function getUserById(id) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('app_users')
+    .select('id,email,role,name')
+    .eq('id', id)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+module.exports = {
+  requestLoginCode,
+  verifyLoginCode,
+  elevateToManager,
+  verifyToken,
+  getUserById,
+  resolveRole,
+};

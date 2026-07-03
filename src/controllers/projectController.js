@@ -5,6 +5,7 @@ const {
       createProject,
       updateProject,
       deleteProject,
+      getProjectNode,
       updateProjectNode,
       seedFromJsonFile,
       seedFromPayload,
@@ -64,6 +65,27 @@ async function patchProjectNode(req, res) {
       const projectId = Number(req.params.projectId);
       const nodeId = req.params.nodeId;
       const payload = req.body || {};
+
+      const { role, picName } = req.user || {};
+      // Quản lý sửa mọi bước. PIC chỉ sửa bước có pic = tên mình. Viewer: cấm.
+      if (role !== "manager") {
+            if (role !== "PIC") {
+                  return res
+                        .status(403)
+                        .json({ error: "Bạn không có quyền sửa" });
+            }
+            const node = await getProjectNode(projectId, nodeId);
+            if (!node) {
+                  return res.status(404).json({ error: "Không tìm thấy bước" });
+            }
+            const owner = (node.pic || "").trim();
+            if (!owner || owner !== (picName || "").trim()) {
+                  return res.status(403).json({
+                        error: "Bạn chỉ được sửa dòng việc được gán cho mình",
+                  });
+            }
+      }
+
       const data = await updateProjectNode(projectId, nodeId, payload);
       res.json(data);
 }

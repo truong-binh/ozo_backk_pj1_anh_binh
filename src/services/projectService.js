@@ -62,6 +62,18 @@ async function getProjectDetail(projectId) {
   return { project, nodes: mergedNodes };
 }
 
+async function getProjectNode(projectId, nodeId) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('project_nodes')
+    .select('pic')
+    .eq('project_id', projectId)
+    .eq('node_id', nodeId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 async function updateProjectNode(projectId, nodeId, payload) {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
@@ -260,6 +272,7 @@ module.exports = {
   createProject,
   updateProject,
   deleteProject,
+  getProjectNode,
   updateProjectNode,
   seedFromJsonFile,
   seedFromPayload,
