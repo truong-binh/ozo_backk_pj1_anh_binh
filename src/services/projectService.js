@@ -25,7 +25,7 @@ async function listProjects() {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
     .from('projects')
-    .select('id,code,name,type,product_group,owner,start_date')
+    .select('id,code,name,type,category,product_group,owner,start_date')
     .order('start_date', { ascending: true });
   if (error) throw error;
   return data ?? [];
@@ -80,7 +80,7 @@ async function listProjectsWithNodes() {
 
   const { data: projects, error: projectsError } = await supabase
     .from('projects')
-    .select('id,code,name,type,product_group,owner,start_date')
+    .select('id,code,name,type,category,product_group,owner,start_date')
     .order('start_date', { ascending: true });
   if (projectsError) throw projectsError;
 
@@ -187,6 +187,7 @@ async function upsertProjectFromJsonRow(projectJson) {
     code: projectJson.id,
     name: projectJson.name,
     type: projectJson.type,
+    category: projectJson.category || null,
     product_group: projectJson.group || null,
     owner: projectJson.owner || null,
     start_date: projectJson.startDate,

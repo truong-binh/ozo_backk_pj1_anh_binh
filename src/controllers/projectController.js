@@ -27,7 +27,7 @@ async function getProjectsWithNodes(req, res) {
 }
 
 async function postProject(req, res) {
-      const { code, name, type, product_group, owner, start_date } =
+      const { code, name, type, category, product_group, owner, start_date } =
             req.body || {};
       if (!code || !name || !type || !start_date) {
             return res
@@ -39,6 +39,7 @@ async function postProject(req, res) {
             code,
             name,
             type,
+            category: category || null,
             product_group: product_group || null,
             owner: owner || null,
             start_date,
