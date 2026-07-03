@@ -23,7 +23,11 @@ module.exports = {
   // Mã bí mật chung để PIC nâng quyền lên Quản lý (sửa tất cả)
   managerCode: (process.env.MANAGER_CODE || '').trim(),
 
-  // SMTP để gửi mã OTP qua email
+  // Gửi OTP qua email (HTTP API — dùng cho deploy trên Render/Vercel vì SMTP bị chặn).
+  brevoApiKey: (process.env.BREVO_API_KEY || '').trim(),
+  sendgridApiKey: (process.env.SENDGRID_API_KEY || '').trim(),
+  resendApiKey: (process.env.RESEND_API_KEY || '').trim(),
+  // SMTP — dùng cho local (nhiều PaaS chặn cổng SMTP).
   smtpHost: process.env.SMTP_HOST || '',
   smtpPort: Number(process.env.SMTP_PORT || 587),
   smtpSecure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
