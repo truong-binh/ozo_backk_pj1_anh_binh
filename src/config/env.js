@@ -34,4 +34,9 @@ module.exports = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
   mailFrom: process.env.MAIL_FROM || '',
+
+  // Cloudinary (lưu file/ảnh đính kèm)
+  cloudinaryCloudName: (process.env.CLOUDINARY_CLOUD_NAME || '').trim(),
+  cloudinaryApiKey: (process.env.CLOUDINARY_API_KEY || '').trim(),
+  cloudinaryApiSecret: (process.env.CLOUDINARY_API_SECRET || '').trim(),
 };
