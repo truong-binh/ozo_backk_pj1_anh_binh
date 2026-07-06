@@ -24,7 +24,7 @@ const WORKFLOW_NODES = [
   { code: 'F2', stage: 'F. Ra mắt & Truyền thông', name: 'Chuẩn bị launching', dept: 'Sale', defaultDuration: 30, defaultAfter: ['F1'] },
   { code: 'G1', stage: 'G. Sản xuất lô đầu', name: 'Xây dựng tài liệu sản xuất', dept: 'RD', defaultDuration: 7, defaultAfter: ['C4', 'E2'] },
   { code: 'G2', stage: 'G. Sản xuất lô đầu', name: 'Sản xuất lô đầu và kiểm nghiệm', dept: 'PP', defaultDuration: 60, defaultAfter: ['G1'] },
-  { code: 'G3', stage: 'G. Sản xuất lô đầu', name: 'Kiểm tra cảm quan mẫu', dept: 'RD', defaultDuration: 2, defaultAfter: ['G2'] },
+  { code: 'G3', stage: 'G. Sản xuất lô đầu', name: 'Kiểm tra cảm quan mẫu', dept: 'RD', defaultDuration: 8, defaultAfter: ['G2'] },
   { code: 'G4', stage: 'G. Sản xuất lô đầu', name: 'Nhập kho', dept: 'PP', defaultDuration: 3, defaultAfter: ['G3'] },
 ];
 

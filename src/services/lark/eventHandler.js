@@ -1,18 +1,7 @@
 const { getUserEmail, sendText } = require('./larkClient');
 const { resolvePicByEmail } = require('../chatbot/chatAuth');
-const { runAgent } = require('../chatbot/agent');
-
-// --- Bộ nhớ hội thoại theo chat_id (RAM, đủ cho 1 instance) ---
-const MAX_HISTORY_PARTS = 40; // ~20 lượt
-const conversations = new Map();
-
-function getHistory(chatId) {
-  return conversations.get(chatId) || [];
-}
-function saveHistory(chatId, history) {
-  const trimmed = history.slice(-MAX_HISTORY_PARTS);
-  conversations.set(chatId, trimmed);
-}
+const { runAgent, provider: llmProvider } = require('../chatbot/agent');
+const { loadHistory, saveHistory } = require('../chatbot/historyStore');
 
 // --- Chống xử lý trùng event (Lark hay retry) ---
 const seenEvents = new Map();
@@ -66,9 +55,9 @@ async function handleMessageEvent(evt) {
     const ctx = await resolvePicByEmail(email);
     console.log('[LARK] email:', email, '| authed:', ctx.authed, '| pic:', ctx.picName);
 
-    const history = getHistory(chatId);
+    const history = await loadHistory(chatId, llmProvider);
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);
-    saveHistory(chatId, newHistory);
+    await saveHistory(chatId, llmProvider, newHistory);
     const sendRes = await sendText(chatId, reply);
     console.log('[LARK] đã gửi trả lời, Lark code:', sendRes?.code);
   } catch (err) {
