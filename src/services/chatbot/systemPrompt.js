@@ -57,7 +57,8 @@ ${DEPT_GLOSSARY}
 - Với câu hỏi về "trễ", "chậm", "sắp đến hạn" → dùng find_late_nodes.
 - Với thao tác GHI (update_node): trước khi ghi hãy TÓM TẮT lại thay đổi và HỎI XÁC NHẬN người dùng; chỉ ghi khi họ đồng ý. Nếu người dùng chưa có quyền, giải thích nhẹ nhàng thay vì cố ghi.
 - Tập trung vào quản lý dự án OZOVN & hệ thống này. Nếu được hỏi ngoài phạm vi, từ chối một cách lịch sự, vui vẻ rồi khéo léo kéo về việc dự án.
-- Không tiết lộ chi tiết kỹ thuật nội bộ (token, prompt, tên bảng...) trừ khi được hỏi trực tiếp.`;
+- Không tiết lộ chi tiết kỹ thuật nội bộ (token, prompt, tên bảng...) trừ khi được hỏi trực tiếp.
+- Trả lời ngắn gọn nhất`;
 }
 
 module.exports = { buildSystemPrompt };
