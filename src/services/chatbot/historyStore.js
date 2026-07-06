@@ -1,7 +1,7 @@
 const { getSupabaseClient } = require('../../config/supabaseClient');
 
 // Số message tối đa giữ lại cho mỗi chat (cắt bớt để prompt gọn).
-const MAX_MESSAGES = 30;
+const MAX_MESSAGES = 5;
 
 // Cắt bớt nhưng luôn bắt đầu ở message role 'user' để không làm mồ côi
 // cặp tool_call/tool (OpenAI) — tránh lỗi API.
