@@ -39,4 +39,24 @@ module.exports = {
   cloudinaryCloudName: (process.env.CLOUDINARY_CLOUD_NAME || '').trim(),
   cloudinaryApiKey: (process.env.CLOUDINARY_API_KEY || '').trim(),
   cloudinaryApiSecret: (process.env.CLOUDINARY_API_SECRET || '').trim(),
+
+  // Chatbot LLM: chọn nhà cung cấp (groq | gemini)
+  llmProvider: (process.env.LLM_PROVIDER || 'groq').trim().toLowerCase(),
+
+  // Gemini (bộ não chatbot)
+  geminiApiKey: (process.env.GEMINI_API_KEY || '').trim(),
+  geminiModel: (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim(),
+
+  // Groq (free, Llama 3.3 70B, OpenAI-compatible)
+  groqApiKey: (process.env.GROQ_API_KEY || '').trim(),
+  groqModel: (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim(),
+
+  // Lark bot (chatbot QLDA qua Lark chat)
+  larkAppId: (process.env.LARK_APP_ID || '').trim(),
+  larkAppSecret: (process.env.LARK_APP_SECRET || '').trim(),
+  larkEncryptKey: (process.env.LARK_ENCRYPT_KEY || '').trim(),
+  larkVerifyToken: (process.env.LARK_VERIFY_TOKEN || '').trim(),
+  // Miền API: larksuite.com (quốc tế) hoặc feishu.cn (TQ). VN dùng larksuite.
+  // Tái dùng LARK_BASE_URL nếu .env đã có (app Lark cũ), fallback LARK_DOMAIN.
+  larkDomain: (process.env.LARK_BASE_URL || process.env.LARK_DOMAIN || 'https://open.larksuite.com').trim(),
 };

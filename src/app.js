@@ -7,6 +7,9 @@ const { isCloudinaryConfigured } = require('./config/cloudinary');
 const { projectRoutes } = require('./routes/projectRoutes');
 const { authRoutes } = require('./routes/authRoutes');
 const { uploadRoutes } = require('./routes/uploadRoutes');
+const { larkRoutes } = require('./routes/larkRoutes');
+const { isLarkConfigured } = require('./services/lark/larkClient');
+const { isLlmConfigured, provider: llmProviderName } = require('./services/chatbot/agent');
 const { requireAuth } = require('./middleware/auth');
 
 const app = express();
@@ -21,6 +24,9 @@ app.get('/health', (req, res) => {
     supabaseConfigured: isConfigured,
     mailConfigured: isMailConfigured,
     cloudinaryConfigured: isCloudinaryConfigured,
+    larkConfigured: isLarkConfigured,
+    llmProvider: llmProviderName,
+    llmConfigured: isLlmConfigured,
   });
 });
 
@@ -29,6 +35,8 @@ app.get('/test', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+// Webhook Lark: Lark gọi trực tiếp, không qua requireAuth (tự verify bằng token).
+app.use('/api/lark', larkRoutes);
 app.use('/api/uploads', requireAuth, uploadRoutes);
 // Tất cả API dự án đều yêu cầu đăng nhập; quyền sửa (PIC) kiểm trong route.
 app.use('/api/projects', requireAuth, projectRoutes);
