@@ -8,6 +8,7 @@ const { projectRoutes } = require('./routes/projectRoutes');
 const { authRoutes } = require('./routes/authRoutes');
 const { uploadRoutes } = require('./routes/uploadRoutes');
 const { larkRoutes } = require('./routes/larkRoutes');
+const { reminderRoutes } = require('./routes/reminderRoutes');
 const { isLarkConfigured } = require('./services/lark/larkClient');
 const { isLlmConfigured, provider: llmProviderName } = require('./services/chatbot/agent');
 const { requireAuth } = require('./middleware/auth');
@@ -40,6 +41,7 @@ app.use('/api/lark', larkRoutes);
 app.use('/api/uploads', requireAuth, uploadRoutes);
 // Tất cả API dự án đều yêu cầu đăng nhập; quyền sửa (PIC) kiểm trong route.
 app.use('/api/projects', requireAuth, projectRoutes);
+app.use('/api/reminders', requireAuth, reminderRoutes);
 
 app.use((error, req, res, next) => {
   console.error(error);

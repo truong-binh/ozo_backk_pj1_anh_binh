@@ -55,6 +55,46 @@ async function sendText(chatId, text) {
   return data;
 }
 
+// Liệt kê các nhóm/chat mà bot đang là thành viên. Trả về [{ chat_id, name, chat_mode, ... }].
+async function listChats() {
+  const token = await getTenantAccessToken();
+  const res = await fetch(`${larkDomain}/open-apis/im/v1/chats?page_size=100`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (data.code !== 0) {
+    console.error('Lark listChats lỗi:', data.code, data.msg);
+    return [];
+  }
+  return data.data?.items || [];
+}
+
+// Gửi tin nhắn text trực tiếp cho 1 người theo email (DM). Cần user có tài khoản
+// Lark với đúng email này trong tenant. Trả về data của Lark ({ code, msg, ... }).
+async function sendTextByEmail(email, text) {
+  const token = await getTenantAccessToken();
+  const res = await fetch(
+    `${larkDomain}/open-apis/im/v1/messages?receive_id_type=email`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receive_id: email,
+        msg_type: 'text',
+        content: JSON.stringify({ text }),
+      }),
+    },
+  );
+  const data = await res.json();
+  if (data.code !== 0) {
+    console.error('Lark sendTextByEmail lỗi:', email, data.code, data.msg);
+  }
+  return data;
+}
+
 // Lấy email của người gửi từ open_id (cần scope contact:user.email:readonly).
 async function getUserEmail(openId) {
   if (!openId) return null;
@@ -77,4 +117,4 @@ async function getUserEmail(openId) {
   }
 }
 
-module.exports = { isLarkConfigured, getTenantAccessToken, sendText, getUserEmail };
+module.exports = { isLarkConfigured, getTenantAccessToken, sendText, sendTextByEmail, listChats, getUserEmail };

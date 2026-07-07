@@ -59,4 +59,15 @@ module.exports = {
   // Miền API: larksuite.com (quốc tế) hoặc feishu.cn (TQ). VN dùng larksuite.
   // Tái dùng LARK_BASE_URL nếu .env đã có (app Lark cũ), fallback LARK_DOMAIN.
   larkDomain: (process.env.LARK_BASE_URL || process.env.LARK_DOMAIN || 'https://open.larksuite.com').trim(),
+
+  // Nhắc việc cho PIC qua Lark (scheduler chạy 8–17h giờ VN, mỗi giờ 1 lần).
+  // Đặt REMINDERS_ENABLED=false để tắt.
+  remindersEnabled: String(process.env.REMINDERS_ENABLED || 'true').toLowerCase() !== 'false',
+
+  // Báo cáo tiến độ gửi vào nhóm Lark mỗi 9h sáng (giờ VN).
+  // LARK_REPORT_CHAT_ID: chat_id nhóm nhận báo cáo (nhiều nhóm cách nhau dấu phẩy).
+  // Bỏ trống -> tự gửi vào tất cả nhóm mà bot tham gia.
+  larkReportChatId: (process.env.LARK_REPORT_CHAT_ID || '').trim(),
+  // URL app cho người dùng truy cập cập nhật công việc.
+  appUrl: (process.env.APP_URL || 'https://ozo-truong-binhs-projects.vercel.app').trim(),
 };
