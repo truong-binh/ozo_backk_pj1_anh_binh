@@ -23,6 +23,8 @@ function deptFromLeaderLabel(pic) {
 
 // Cột đọc theo bậc: mới nhất -> cũ dần (để không vỡ khi DB thiếu cột).
 const SELECT_SPECS = [
+  'pic_name,email,open_id,dept,is_leader,lead_depts',
+  'pic_name,email,dept,is_leader,lead_depts',
   'pic_name,dept,is_leader,lead_depts',
   'pic_name,dept,is_leader',
   'pic_name,dept',
@@ -33,6 +35,8 @@ function normalizeRow(data) {
   if (!data) return null;
   return {
     pic_name: data.pic_name || null,
+    email: (data.email || '').trim() || null,
+    open_id: (data.open_id || '').trim() || null,
     dept: (data.dept || '').trim() || null,
     is_leader: !!data.is_leader,
     lead_depts: Array.isArray(data.lead_depts) ? data.lead_depts : [],
@@ -49,6 +53,24 @@ async function getMemberByEmail(email) {
       .from('pic_members')
       .select(spec)
       .eq('email', e)
+      .maybeSingle();
+    if (!error) return normalizeRow(data);
+  }
+  return null;
+}
+
+// Lấy 1 PIC theo open_id (Lark) -> { pic_name, email, open_id, dept, ... } | null.
+// Dùng cho chatbot & nhắc việc: open_id luôn có, kể cả người không email.
+async function getMemberByOpenId(openId) {
+  const supabase = getSupabaseClient();
+  const oid = String(openId || '').trim();
+  if (!oid) return null;
+  for (const spec of SELECT_SPECS) {
+    if (!spec.includes('open_id')) break; // cột chưa tồn tại -> khỏi tra
+    const { data, error } = await supabase
+      .from('pic_members')
+      .select(spec)
+      .eq('open_id', oid)
       .maybeSingle();
     if (!error) return normalizeRow(data);
   }
@@ -111,6 +133,7 @@ async function getDeptLeaderMap() {
 
 module.exports = {
   getMemberByEmail,
+  getMemberByOpenId,
   findMemberByName,
   listAllMembers,
   leadDeptsOf,

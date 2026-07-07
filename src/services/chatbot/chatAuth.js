@@ -1,7 +1,26 @@
-const { getMemberByEmail, leadDeptsOf } = require('../picMembersService');
+const { getMemberByEmail, getMemberByOpenId, leadDeptsOf } = require('../picMembersService');
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
+}
+
+// Tra pic_members theo open_id (Lark) -> { authed, openId, email, picName, leadDepts }.
+// Ưu tiên cách này vì open_id luôn có, kể cả người đăng ký Lark bằng SĐT/ẩn mail.
+async function resolvePicByOpenId(openId) {
+  const oid = String(openId || '').trim();
+  if (!oid) return { authed: false, openId: '', email: '', picName: null, leadDepts: [] };
+
+  const member = await getMemberByOpenId(oid);
+  if (member && member.pic_name) {
+    return {
+      authed: true,
+      openId: oid,
+      email: member.email || '',
+      picName: member.pic_name,
+      leadDepts: leadDeptsOf(member),
+    };
+  }
+  return { authed: false, openId: oid, email: '', picName: null, leadDepts: [] };
 }
 
 // Tra pic_members theo email -> { authed, email, picName, leadDepts }.
@@ -17,4 +36,4 @@ async function resolvePicByEmail(rawEmail) {
   return { authed: false, email, picName: null, leadDepts: [] };
 }
 
-module.exports = { resolvePicByEmail, normalizeEmail };
+module.exports = { resolvePicByEmail, resolvePicByOpenId, normalizeEmail };

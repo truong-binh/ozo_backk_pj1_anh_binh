@@ -19,8 +19,8 @@ const DEPT_GLOSSARY = `
 
 function buildSystemPrompt(ctx) {
   const who = ctx.authed
-    ? `Người đang chat: ${ctx.picName} (email ${ctx.email}) — là PIC, ĐƯỢC sửa các bước có PIC = "${ctx.picName}".`
-    : `Người đang chat: ${ctx.email || 'chưa rõ email'} — CHỈ XEM (không nằm trong danh sách PIC, không được ghi).`;
+    ? `Người đang chat: ${ctx.picName}${ctx.email ? ` (email ${ctx.email})` : ''} — là PIC, ĐƯỢC sửa các bước có PIC = "${ctx.picName}".`
+    : `Người đang chat: ${ctx.picName || ctx.email || 'chưa rõ'} — CHỈ XEM (không nằm trong danh sách PIC, không được ghi).`;
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;

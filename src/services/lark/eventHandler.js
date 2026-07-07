@@ -1,5 +1,5 @@
 const { getUserEmail, sendText } = require('./larkClient');
-const { resolvePicByEmail } = require('../chatbot/chatAuth');
+const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
 
@@ -50,10 +50,14 @@ async function handleMessageEvent(evt) {
   }
 
   try {
-    // Xác thực quyền ghi: email Lark -> pic_members.
-    const email = await getUserEmail(openId);
-    const ctx = await resolvePicByEmail(email);
-    console.log('[LARK] email:', email, '| authed:', ctx.authed, '| pic:', ctx.picName);
+    // Xác thực quyền ghi. Ưu tiên open_id (luôn có, kể cả người không email trên
+    // Lark); chỉ khi chưa khớp mới thử qua email (cho dữ liệu cũ chưa có open_id).
+    let ctx = await resolvePicByOpenId(openId);
+    if (!ctx.authed) {
+      const email = await getUserEmail(openId);
+      if (email) ctx = await resolvePicByEmail(email);
+    }
+    console.log('[LARK] open_id:', openId, '| authed:', ctx.authed, '| pic:', ctx.picName);
 
     const history = await loadHistory(chatId, llmProvider);
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);

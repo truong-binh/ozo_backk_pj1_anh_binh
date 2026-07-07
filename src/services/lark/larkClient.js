@@ -152,6 +152,33 @@ async function sendTextByEmail(email, text) {
   return data;
 }
 
+// Gửi tin nhắn text trực tiếp cho 1 người theo open_id (DM). open_id luôn lấy
+// được từ event/list thành viên nên gửi được cả cho người không có email trên
+// Lark. Trả về data của Lark ({ code, msg, ... }).
+async function sendTextByOpenId(openId, text) {
+  const token = await getTenantAccessToken();
+  const res = await fetch(
+    `${larkDomain}/open-apis/im/v1/messages?receive_id_type=open_id`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receive_id: openId,
+        msg_type: 'text',
+        content: JSON.stringify({ text }),
+      }),
+    },
+  );
+  const data = await res.json();
+  if (data.code !== 0) {
+    console.error('Lark sendTextByOpenId lỗi:', openId, data.code, data.msg);
+  }
+  return data;
+}
+
 // Lấy email của người gửi từ open_id (cần scope contact:user.email:readonly).
 async function getUserEmail(openId) {
   if (!openId) return null;
@@ -179,6 +206,7 @@ module.exports = {
   getTenantAccessToken,
   sendText,
   sendTextByEmail,
+  sendTextByOpenId,
   listChats,
   listChatMembers,
   getUserEmail,

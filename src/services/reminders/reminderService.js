@@ -9,7 +9,7 @@
 const { listProjectsWithNodes, getProjectDetail } = require('../projectService');
 const { getSupabaseClient } = require('../../config/supabaseClient');
 const { computeAllDates } = require('../../utils/datePlanner');
-const { sendTextByEmail, isLarkConfigured } = require('../lark/larkClient');
+const { sendTextByEmail, sendTextByOpenId, isLarkConfigured } = require('../lark/larkClient');
 const { remindersEnabled } = require('../../config/env');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -32,14 +32,23 @@ function fmtDMY(y, m, d) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
 }
 
-// Map pic_name (chuẩn hoá) -> email, lấy từ pic_members.
-async function loadPicEmailMap() {
+// Map pic_name (chuẩn hoá) -> { open_id, email } từ pic_members. Gửi ưu tiên
+// open_id (tới được cả người không có email trên Lark), fallback email.
+// Đọc graded để không vỡ nếu DB chưa có cột open_id.
+async function loadPicContactMap() {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase.from('pic_members').select('email,pic_name');
-  if (error) throw error;
+  let rows = null;
+  for (const spec of ['pic_name,open_id,email', 'pic_name,email']) {
+    const { data, error } = await supabase.from('pic_members').select(spec);
+    if (!error) { rows = data; break; }
+  }
   const map = new Map();
-  for (const row of data || []) {
-    if (row.pic_name && row.email) map.set(norm(row.pic_name), row.email);
+  for (const row of rows || []) {
+    const open_id = (row.open_id || '').trim() || null;
+    const email = (row.email || '').trim() || null;
+    if (row.pic_name && (open_id || email)) {
+      map.set(norm(row.pic_name), { open_id, email });
+    }
   }
   return map;
 }
@@ -163,10 +172,23 @@ function composeMessage(list) {
   return out.join('\n');
 }
 
+// Gửi 1 tin cho 1 người theo liên hệ tốt nhất: open_id trước (tới được cả người
+// không email trên Lark), lỗi thì fallback email. Trả về data Lark ({code,msg}).
+async function sendToContact(contact, text) {
+  if (contact?.open_id) {
+    const r = await sendTextByOpenId(contact.open_id, text);
+    if (r && r.code === 0) return r;
+    if (contact.email) return sendTextByEmail(contact.email, text); // open_id lỗi -> thử email
+    return r;
+  }
+  if (contact?.email) return sendTextByEmail(contact.email, text);
+  return { code: -1, msg: 'no-contact' };
+}
+
 // Chạy 1 lượt nhắc. options:
 //   dryRun=true -> chỉ tính & trả nội dung, KHÔNG gửi, KHÔNG ghi DB.
 async function runReminders({ dryRun = false } = {}) {
-  const picEmail = await loadPicEmailMap();
+  const contactMap = await loadPicContactMap();
   const { items } = await computeReminderItems();
 
   let remaining = items;
@@ -184,11 +206,14 @@ async function runReminders({ dryRun = false } = {}) {
     }
   }
 
-  // Gắn email cho từng item; tách nhóm gửi được / thiếu email.
-  for (const it of remaining) it.email = picEmail.get(norm(it.pic)) || null;
-  const sendable = remaining.filter((it) => it.email);
-  const noEmail = remaining.filter((it) => !it.email);
-  const missingPics = [...new Set(noEmail.map((it) => it.pic))];
+  // Gắn liên hệ (open_id/email) cho từng item; tách nhóm gửi được / không liên hệ.
+  for (const it of remaining) {
+    it.contact = contactMap.get(norm(it.pic)) || null;
+    it.email = it.contact?.email || null; // để recordSent lưu lại
+  }
+  const sendable = remaining.filter((it) => it.contact && (it.contact.open_id || it.contact.email));
+  const noContact = remaining.filter((it) => !(it.contact && (it.contact.open_id || it.contact.email)));
+  const missingPics = [...new Set(noContact.map((it) => it.pic))];
 
   // Lần chạy ĐẦU TIÊN (bảng rỗng): ghi nhận hiện trạng, KHÔNG gửi để tránh spam
   // hàng loạt việc cũ. Từ lần sau chỉ những thay đổi mới mới được gửi.
@@ -199,30 +224,31 @@ async function runReminders({ dryRun = false } = {}) {
       firstRun: true,
       backfilled: sendable.length,
       sent: 0,
-      noEmailItems: noEmail.length,
+      noContactItems: noContact.length,
       missingPics,
       note: 'Lần đầu: đã ghi nhận hiện trạng, chưa gửi tin nào.',
     };
   }
 
-  // Gộp theo email -> 1 tin/người.
-  const byEmail = new Map();
+  // Gộp theo người (khóa = open_id || email) -> 1 tin/người.
+  const byPerson = new Map();
   for (const it of sendable) {
-    if (!byEmail.has(it.email)) byEmail.set(it.email, []);
-    byEmail.get(it.email).push(it);
+    const key = it.contact.open_id || it.contact.email;
+    if (!byPerson.has(key)) byPerson.set(key, { contact: it.contact, list: [] });
+    byPerson.get(key).list.push(it);
   }
 
   const preview = [];
   const sentItems = [];
-  for (const [email, list] of byEmail) {
+  for (const [key, { contact, list }] of byPerson) {
     const text = composeMessage(list);
     if (dryRun) {
-      preview.push({ email, count: list.length, text });
+      preview.push({ to: key, count: list.length, text });
       continue;
     }
-    const res = await sendTextByEmail(email, text);
+    const res = await sendToContact(contact, text);
     if (res && res.code === 0) sentItems.push(...list);
-    else preview.push({ email, count: list.length, ok: false, err: res?.msg });
+    else preview.push({ to: key, count: list.length, ok: false, err: res?.msg });
   }
 
   if (!dryRun) await recordSent(sentItems);
@@ -230,9 +256,9 @@ async function runReminders({ dryRun = false } = {}) {
   return {
     ok: true,
     dryRun,
-    people: byEmail.size,
+    people: byPerson.size,
     sent: dryRun ? 0 : sentItems.length,
-    noEmailItems: noEmail.length,
+    noContactItems: noContact.length,
     missingPics,
     preview: dryRun ? preview : preview.length ? preview : undefined,
   };
@@ -255,10 +281,12 @@ async function notifyAssignment(projectId, nodeId) {
   if (DONE.has(node.status)) return { ok: false, reason: 'done' };
 
   // PIC là nhãn vai trò ("Trưởng phòng ...") hoặc người ngoài danh bạ -> không có
-  // email -> bỏ qua, không phải lỗi.
-  const picEmail = await loadPicEmailMap();
-  const email = picEmail.get(norm(node.pic));
-  if (!email) return { ok: false, reason: 'no_email', pic: node.pic };
+  // liên hệ -> bỏ qua, không phải lỗi.
+  const contactMap = await loadPicContactMap();
+  const contact = contactMap.get(norm(node.pic));
+  if (!contact || (!contact.open_id && !contact.email)) {
+    return { ok: false, reason: 'no_contact', pic: node.pic };
+  }
 
   const dedup_key = norm(node.pic);
 
@@ -285,15 +313,18 @@ async function notifyAssignment(projectId, nodeId) {
     ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate())
     : '—';
 
-  const item = { project, node, pic: node.pic, dueLabel, kind: 'assigned', dedup_key, email };
-  const res = await sendTextByEmail(email, composeMessage([item]));
+  const item = {
+    project, node, pic: node.pic, dueLabel, kind: 'assigned', dedup_key,
+    email: contact.email || null,
+  };
+  const res = await sendToContact(contact, composeMessage([item]));
   if (res && res.code === 0) {
     try {
       await recordSent([item]);
     } catch (_e) {
       // gửi được là chính; ghi dedupe lỗi (vd chưa có bảng) thì bỏ qua.
     }
-    return { ok: true, sent: 1, email };
+    return { ok: true, sent: 1, via: contact.open_id ? 'open_id' : 'email' };
   }
   return { ok: false, reason: 'send_failed', err: res?.msg };
 }
