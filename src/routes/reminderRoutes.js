@@ -23,7 +23,8 @@ router.post(
   requireManager,
   asyncHandler(async (req, res) => {
     const dryRun = String(req.query.dryRun ?? req.body?.dryRun ?? '') === 'true';
-    const result = await sendDailyReport({ dryRun });
+    const force = String(req.query.force ?? req.body?.force ?? '') === 'true';
+    const result = await sendDailyReport({ dryRun, force });
     res.json(result);
   }),
 );

@@ -5,6 +5,7 @@
 const { listProjectsWithNodes } = require('../projectService');
 const { computeAllDates } = require('../../utils/datePlanner');
 const { sendText, listChats } = require('../lark/larkClient');
+const { getSupabaseClient } = require('../../config/supabaseClient');
 const { larkReportChatId, appUrl } = require('../../config/env');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -15,7 +16,31 @@ function vnToday() {
     timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
   const [y, m, d] = iso.split('-').map(Number);
-  return { y, m, d, utc: Date.UTC(y, m - 1, d) };
+  return { y, m, d, iso, utc: Date.UTC(y, m - 1, d) };
+}
+
+// Chống gửi trùng qua bảng sent_reminders (kind='daily_report', dedup_key=ngày ISO).
+// Nếu bảng chưa tạo -> trả known=false để không chặn (vẫn gửi, dựa dedup RAM).
+async function reportAlreadySent(dateIso) {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('sent_reminders')
+    .select('id')
+    .eq('kind', 'daily_report')
+    .eq('dedup_key', dateIso)
+    .limit(1);
+  if (error) return { known: false, sent: false };
+  return { known: true, sent: (data || []).length > 0 };
+}
+
+async function markReportSent(dateIso) {
+  const supabase = getSupabaseClient();
+  await supabase
+    .from('sent_reminders')
+    .upsert(
+      [{ project_id: 0, node_id: '-', kind: 'daily_report', dedup_key: dateIso }],
+      { onConflict: 'project_id,node_id,kind,dedup_key', ignoreDuplicates: true },
+    );
 }
 
 function fmtDMY(y, m, d) {
@@ -92,8 +117,8 @@ async function resolveChatIds() {
   return chats.filter((c) => c.chat_mode === 'group').map((c) => c.chat_id);
 }
 
-// Gửi báo cáo. dryRun=true -> chỉ trả nội dung, không gửi.
-async function sendDailyReport({ dryRun = false } = {}) {
+// Gửi báo cáo. dryRun=true -> chỉ xem trước. force=true -> gửi lại dù đã gửi hôm nay.
+async function sendDailyReport({ dryRun = false, force = false } = {}) {
   const rep = await computeReport();
   const text = formatReport(rep);
   const counts = {
@@ -104,6 +129,14 @@ async function sendDailyReport({ dryRun = false } = {}) {
 
   if (dryRun) return { ok: true, dryRun: true, counts, text };
 
+  // Chống trùng: mỗi ngày chỉ gửi 1 lần (trừ khi force). Deploy/restart không gửi lại.
+  if (!force) {
+    const chk = await reportAlreadySent(rep.today.iso);
+    if (chk.known && chk.sent) {
+      return { ok: true, skipped: true, reason: `đã gửi báo cáo ngày ${rep.today.iso}`, counts };
+    }
+  }
+
   const chatIds = await resolveChatIds();
   if (!chatIds.length) {
     return { ok: false, error: 'Không tìm thấy nhóm nào (bot đã được add vào nhóm chưa? hoặc set LARK_REPORT_CHAT_ID).', counts };
@@ -113,6 +146,8 @@ async function sendDailyReport({ dryRun = false } = {}) {
     const r = await sendText(cid, text);
     sentTo.push({ chat_id: cid, ok: r?.code === 0, msg: r?.msg });
   }
+  // Chỉ đánh dấu đã gửi khi có ít nhất 1 nhóm nhận thành công.
+  if (sentTo.some((s) => s.ok)) await markReportSent(rep.today.iso);
   return { ok: true, counts, sentTo };
 }
 

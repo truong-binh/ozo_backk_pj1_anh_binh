@@ -104,7 +104,11 @@ async function filterUnsent(items) {
   const seen = new Set(
     (data || []).map((r) => `${r.project_id}|${r.node_id}|${r.kind}|${r.dedup_key}`),
   );
-  const firstRun = (data || []).length === 0;
+  // "Lần đầu" chỉ tính theo dòng của nhắc-PIC, KHÔNG tính dòng báo cáo nhóm
+  // (daily_report) — nếu không, sau khi báo cáo chạy 1 lần sẽ hiểu nhầm là đã
+  // qua lần đầu và gửi ồ ạt "việc mới giao" cho mọi việc cũ.
+  const PIC_KINDS = new Set(['assigned', 'due_soon', 'overdue']);
+  const firstRun = (data || []).filter((r) => PIC_KINDS.has(r.kind)).length === 0;
   const remaining = items.filter(
     (it) => !seen.has(`${it.project.id}|${it.node.node_id}|${it.kind}|${it.dedup_key}`),
   );

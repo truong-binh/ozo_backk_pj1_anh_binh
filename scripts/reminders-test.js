@@ -28,7 +28,8 @@ const mode = process.argv[2] || 'preview';
   if (mode === 'report') {
     const { sendDailyReport } = require('../src/services/reminders/reportService');
     const send = process.argv[3] === 'send';
-    const res = await sendDailyReport({ dryRun: !send });
+    // Gửi tay luôn force để không bị chặn bởi dedup "đã gửi hôm nay".
+    const res = await sendDailyReport({ dryRun: !send, force: send });
     console.log('== BÁO CÁO ==', send ? '(GỬI THẬT)' : '(DRY-RUN)');
     console.log('counts:', JSON.stringify(res.counts), res.sentTo ? '| sentTo: ' + JSON.stringify(res.sentTo) : res.error ? '| ' + res.error : '');
     if (res.text) console.log('\n' + res.text);
