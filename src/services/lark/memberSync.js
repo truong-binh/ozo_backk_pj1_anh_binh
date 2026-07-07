@@ -21,16 +21,24 @@ async function syncOneMember(openId) {
   // Duyệt tất cả phòng ban của user: gom mã phòng + các phòng người này làm trưởng phòng.
   const depts = [];
   const leadDepts = [];
+  const rawSeen = [];
   for (const did of user.department_ids || []) {
     const d = await getDepartment(did);
-    if (!d) continue;
-    const code = mapLarkDept(d.name);
+    if (!d) {
+      console.warn('[member-sync] không đọc được phòng', did, '- kiểm scope contact:department.base:readonly');
+      continue;
+    }
+    const rawName = (d.name || '').trim();
+    if (rawName) rawSeen.push(rawName);
+    // Map tên Lark -> mã app; nếu chưa có trong LARK_DEPT_MAP thì tạm dùng tên gốc.
+    const code = mapLarkDept(rawName) || rawName;
     if (!code) continue;
     if (!depts.includes(code)) depts.push(code);
     if (d.leader_user_id && d.leader_user_id === openId && !leadDepts.includes(code)) {
       leadDepts.push(code);
     }
   }
+  console.log('[member-sync] phòng Lark của', name, ':', rawSeen.join(' | ') || '(không có / không đọc được)');
 
   const supabase = getSupabaseClient();
   const base = { email, pic_name: name };

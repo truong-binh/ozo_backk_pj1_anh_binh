@@ -12,6 +12,7 @@ const {
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
+const { findMemberByName } = require('../picMembersService');
 
 const STATUS_OPTIONS = ['Chưa làm', 'Đang làm', 'Đã xong', 'Tạm dừng', 'Bỏ qua'];
 
@@ -284,7 +285,7 @@ const tools = {
           ? 'Chỉ xem. Email Lark của bạn chưa nằm trong danh sách PIC.'
           : isLeader
             ? `Trưởng phòng ${leadDepts.join(', ')}: sửa mọi bước thuộc phòng này (kể cả đổi PIC), và các bước gán cho bạn.`
-            : 'Chỉ được sửa các bước có PIC = tên bạn.',
+            : 'Sửa các bước có PIC = tên bạn; được chuyển bước của mình cho PIC khác CÙNG PHÒNG.',
       };
     },
   },
@@ -293,7 +294,7 @@ const tools = {
     declaration: {
       name: 'update_node',
       description:
-        'CẬP NHẬT 1 bước của dự án. Quyền: PIC phụ trách bước đó, hoặc TRƯỞNG PHÒNG của phòng phụ trách bước đó (được đổi cả PIC). Có thể đổi status, actual_date (YYYY-MM-DD), notes, duration, pic. LUÔN xác nhận lại với người dùng trước khi ghi.',
+        'CẬP NHẬT 1 bước của dự án. Quyền: PIC phụ trách bước đó (được CHUYỂN bước cho PIC khác CÙNG PHÒNG), hoặc TRƯỞNG PHÒNG của phòng phụ trách bước đó (đổi PIC cho bất kỳ ai). Có thể đổi status, actual_date (YYYY-MM-DD), notes, duration, pic. LUÔN xác nhận lại với người dùng trước khi ghi.',
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -360,11 +361,25 @@ const tools = {
         payload.duration = d;
       }
       if (args.pic !== undefined) {
-        // Chỉ trưởng phòng của phòng bước đó (hoặc quản lý) mới được đổi PIC.
-        if (!isLeaderOfDept) {
-          return { error: 'Chỉ trưởng phòng của phòng phụ trách bước này mới được đổi PIC.' };
+        const newPic = String(args.pic || '').trim();
+        if (isLeaderOfDept) {
+          // Trưởng phòng: gán cho ai cũng được (trong phòng mình quản lý).
+          payload.pic = newPic;
+        } else {
+          // PIC thường (chủ bước): chỉ được CHUYỂN bước cho PIC khác CÙNG PHÒNG với bước.
+          if (!newPic) return { error: 'Tên PIC mới đang trống.' };
+          const target = await findMemberByName(newPic);
+          if (!target) {
+            return { error: `Không tìm thấy PIC "${newPic}" trong danh bạ.` };
+          }
+          const targetDept = (target.dept || '').trim();
+          if (!nodeDept || targetDept !== nodeDept) {
+            return {
+              error: `Chỉ được chuyển cho PIC cùng phòng ${nodeDept || '—'}. "${target.pic_name}" thuộc phòng ${targetDept || '—'}.`,
+            };
+          }
+          payload.pic = target.pic_name; // dùng tên chuẩn trong danh bạ
         }
-        payload.pic = String(args.pic || '').trim();
       }
       if (Object.keys(payload).length === 0) {
         return { error: 'Không có gì để cập nhật.' };

@@ -88,6 +88,41 @@ async function updateProjectNode(projectId, nodeId, payload) {
   return data;
 }
 
+// Khi 1 bước hoàn tất -> các bước kế tiếp (successor trực tiếp) đủ điều kiện thì
+// tự chuyển 'Chưa làm' -> 'Đang làm'. "Đủ điều kiện" = mọi bước phụ thuộc (after)
+// đã 'Đã xong' hoặc 'Bỏ qua'. Trả về danh sách node_id vừa được mở.
+const SATISFIED_DEP = new Set(['Đã xong', 'Bỏ qua']);
+async function startReadySuccessors(projectId, completedNodeId) {
+  const supabase = getSupabaseClient();
+  const { data: nodes, error } = await supabase
+    .from('project_nodes')
+    .select('node_id,status,after')
+    .eq('project_id', projectId);
+  if (error) throw error;
+
+  const byId = new Map((nodes || []).map((n) => [n.node_id, n]));
+  const toStart = [];
+  for (const n of nodes || []) {
+    if (n.status !== 'Chưa làm') continue;
+    const deps = Array.isArray(n.after) ? n.after : [];
+    if (!deps.includes(completedNodeId)) continue; // chỉ bước phụ thuộc trực tiếp
+    const allDone = deps.every((d) => {
+      const dep = byId.get(d);
+      return !dep || SATISFIED_DEP.has(dep.status);
+    });
+    if (allDone) toStart.push(n.node_id);
+  }
+
+  for (const nid of toStart) {
+    await supabase
+      .from('project_nodes')
+      .update({ status: 'Đang làm' })
+      .eq('project_id', projectId)
+      .eq('node_id', nid);
+  }
+  return toStart;
+}
+
 async function listProjectsWithNodes() {
   const supabase = getSupabaseClient();
 
@@ -276,6 +311,7 @@ module.exports = {
   deleteProject,
   getProjectNode,
   updateProjectNode,
+  startReadySuccessors,
   seedFromJsonFile,
   seedFromPayload,
 };

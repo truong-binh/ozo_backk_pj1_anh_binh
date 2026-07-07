@@ -55,6 +55,30 @@ async function getMemberByEmail(email) {
   return null;
 }
 
+// Đọc tất cả pic_members (graded fallback theo cột).
+async function listAllMembers() {
+  const supabase = getSupabaseClient();
+  for (const spec of SELECT_SPECS) {
+    const { data, error } = await supabase.from('pic_members').select(spec);
+    if (!error) return (data || []).map(normalizeRow).filter(Boolean);
+  }
+  return [];
+}
+
+function nameMatches(a, b) {
+  const x = norm(a);
+  const y = norm(b);
+  if (!x || !y) return false;
+  return x === y || x.endsWith(y) || y.endsWith(x);
+}
+
+// Tìm 1 PIC theo tên (khớp gần đúng, bỏ dấu) -> member | null.
+async function findMemberByName(name) {
+  if (!norm(name)) return null;
+  const all = await listAllMembers();
+  return all.find((m) => nameMatches(m.pic_name, name)) || null;
+}
+
 // Các phòng 1 người làm TRƯỞNG PHÒNG. Ưu tiên lead_depts (mảng, hỗ trợ nhiều phòng);
 // fallback cờ is_leader + dept (model cũ 1 phòng).
 function leadDeptsOf(member) {
@@ -87,6 +111,8 @@ async function getDeptLeaderMap() {
 
 module.exports = {
   getMemberByEmail,
+  findMemberByName,
+  listAllMembers,
   leadDeptsOf,
   getDeptLeaderMap,
   norm,

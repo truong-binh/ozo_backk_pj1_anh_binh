@@ -7,6 +7,7 @@ const {
       deleteProject,
       getProjectNode,
       updateProjectNode,
+      startReadySuccessors,
       seedFromJsonFile,
       seedFromPayload,
 } = require("../services/projectService");
@@ -92,7 +93,18 @@ async function patchProjectNode(req, res) {
             }
       }
 
+      // Tự động: điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong'.
+      if (payload.actual_date && payload.status === undefined) {
+            payload.status = "Đã xong";
+      }
+
       const data = await updateProjectNode(projectId, nodeId, payload);
+
+      // Bước vừa 'Đã xong' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
+      if (data.status === "Đã xong") {
+            await startReadySuccessors(projectId, nodeId);
+      }
+
       res.json(data);
 }
 
