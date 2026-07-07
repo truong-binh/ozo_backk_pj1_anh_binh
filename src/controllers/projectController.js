@@ -11,6 +11,8 @@ const {
       seedFromJsonFile,
       seedFromPayload,
 } = require("../services/projectService");
+const { findMemberByName } = require("../services/picMembersService");
+const { notifyAssignment } = require("../services/reminders/reminderService");
 
 async function getProjects(req, res) {
       const data = await listProjects();
@@ -91,6 +93,27 @@ async function patchProjectNode(req, res) {
                               "Bạn chỉ được sửa bước của mình hoặc bước thuộc phòng bạn quản lý",
                   });
             }
+
+            // PIC-chủ-bước (không phải trưởng phòng) muốn ĐỔI PIC -> chỉ được
+            // chuyển cho người CÙNG PHÒNG với bước.
+            if (payload.pic !== undefined && !isLeaderOfDept) {
+                  const newPic = String(payload.pic || "").trim();
+                  if (newPic && newPic !== owner) {
+                        const target = await findMemberByName(newPic);
+                        if (!target) {
+                              return res.status(400).json({
+                                    error: `Không tìm thấy PIC "${newPic}" trong danh bạ.`,
+                              });
+                        }
+                        const targetDept = (target.dept || "").trim();
+                        if (!nodeDept || targetDept !== nodeDept) {
+                              return res.status(403).json({
+                                    error: `Chỉ được chuyển cho PIC cùng phòng ${nodeDept || "—"}. "${target.pic_name}" thuộc phòng ${targetDept || "—"}.`,
+                              });
+                        }
+                        payload.pic = target.pic_name; // chuẩn hoá tên theo danh bạ
+                  }
+            }
       }
 
       // Tự động: điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong'.
@@ -103,6 +126,14 @@ async function patchProjectNode(req, res) {
       // Bước vừa 'Đã xong' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
       if (data.status === "Đã xong") {
             await startReadySuccessors(projectId, nodeId);
+      }
+
+      // Vừa phân/đổi PIC -> gửi ngay thông báo "việc mới được giao" cho PIC (Lark DM).
+      // Chạy nền, không chặn phản hồi; dedupe & bỏ qua nhãn vai trò nằm trong service.
+      if (payload.pic !== undefined) {
+            notifyAssignment(projectId, nodeId).catch((e) =>
+                  console.error("[assign-notify] lỗi:", e.message),
+            );
       }
 
       res.json(data);

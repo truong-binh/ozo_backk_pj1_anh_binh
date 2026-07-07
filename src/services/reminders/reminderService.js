@@ -1,14 +1,16 @@
 // Nhắc việc cho PIC qua Lark DM. Ba loại nhắc:
-//   - assigned : việc mới được giao (node có PIC) -> nhắc 1 lần cho mỗi PIC/node
+//   - assigned : việc mới được giao (node có PIC) -> GỬI NGAY khi phân PIC (event),
+//                không quét theo giờ nữa; xem notifyAssignment().
 //   - due_soon : trước hạn ~24h (hạn = ngày mai theo giờ VN) -> nhắc 1 lần cho mỗi mốc hạn
 //   - overdue  : quá hạn -> nhắc MỖI NGÀY 1 lần cho tới khi 'Đã xong'/'Bỏ qua'
 // Chống gửi trùng bằng bảng public.sent_reminders (dedup theo project/node/kind/dedup_key).
 // Hạn (due) tính động bằng computeAllDates — không lưu sẵn trong DB.
 
-const { listProjectsWithNodes } = require('../projectService');
+const { listProjectsWithNodes, getProjectDetail } = require('../projectService');
 const { getSupabaseClient } = require('../../config/supabaseClient');
 const { computeAllDates } = require('../../utils/datePlanner');
-const { sendTextByEmail } = require('../lark/larkClient');
+const { sendTextByEmail, isLarkConfigured } = require('../lark/larkClient');
+const { remindersEnabled } = require('../../config/env');
 
 const TZ = 'Asia/Ho_Chi_Minh';
 const DONE = new Set(['Đã xong', 'Bỏ qua']);
@@ -71,8 +73,8 @@ async function computeReminderItems() {
         dueLabel: fmtDMY(dy, dm, dd),
       };
 
-      // Việc mới giao: ứng viên mọi lần chạy, dedup theo PIC -> chỉ gửi 1 lần/PIC/node.
-      items.push({ ...base, kind: 'assigned', dedup_key: norm(node.pic) });
+      // Việc mới giao (assigned) KHÔNG quét ở đây nữa — đã chuyển sang gửi ngay
+      // khi phân PIC qua notifyAssignment(). Vòng quét chỉ lo due_soon/overdue.
 
       // Trước hạn ~24h: hạn rơi đúng vào ngày mai.
       if (diffDays === 1) {
@@ -104,10 +106,11 @@ async function filterUnsent(items) {
   const seen = new Set(
     (data || []).map((r) => `${r.project_id}|${r.node_id}|${r.kind}|${r.dedup_key}`),
   );
-  // "Lần đầu" chỉ tính theo dòng của nhắc-PIC, KHÔNG tính dòng báo cáo nhóm
-  // (daily_report) — nếu không, sau khi báo cáo chạy 1 lần sẽ hiểu nhầm là đã
-  // qua lần đầu và gửi ồ ạt "việc mới giao" cho mọi việc cũ.
-  const PIC_KINDS = new Set(['assigned', 'due_soon', 'overdue']);
+  // "Lần đầu" chỉ tính theo các loại mà VÒNG QUÉT tạo ra (due_soon/overdue).
+  // KHÔNG tính 'assigned' (giờ do sự kiện phân PIC ghi vào bất cứ lúc nào) và
+  // KHÔNG tính dòng báo cáo nhóm (daily_report) — nếu không sẽ hiểu nhầm đã qua
+  // lần đầu và gửi ồ ạt việc quá hạn cũ.
+  const PIC_KINDS = new Set(['due_soon', 'overdue']);
   const firstRun = (data || []).filter((r) => PIC_KINDS.has(r.kind)).length === 0;
   const remaining = items.filter(
     (it) => !seen.has(`${it.project.id}|${it.node.node_id}|${it.kind}|${it.dedup_key}`),
@@ -235,4 +238,64 @@ async function runReminders({ dryRun = false } = {}) {
   };
 }
 
-module.exports = { runReminders };
+// Gửi NGAY 1 thông báo "việc mới được giao" cho đúng 1 bước khi PIC vừa được
+// phân (gọi từ luồng sửa node). Dedupe qua sent_reminders theo (project/node/
+// assigned/norm(pic)) -> đổi sang PIC khác thì gửi cho người mới; giữ nguyên PIC
+// thì không gửi lại. Trả { ok, reason?, ... }. Không ném lỗi ra ngoài để không
+// làm hỏng thao tác lưu — luồng gọi vẫn nên .catch() cho chắc.
+async function notifyAssignment(projectId, nodeId) {
+  if (!remindersEnabled || !isLarkConfigured) {
+    return { ok: false, reason: 'disabled' };
+  }
+
+  const { project, nodes } = await getProjectDetail(projectId);
+  const node = (nodes || []).find((n) => n.node_id === nodeId);
+  if (!node) return { ok: false, reason: 'not_found' };
+  if (!node.pic || !String(node.pic).trim()) return { ok: false, reason: 'no_pic' };
+  if (DONE.has(node.status)) return { ok: false, reason: 'done' };
+
+  // PIC là nhãn vai trò ("Trưởng phòng ...") hoặc người ngoài danh bạ -> không có
+  // email -> bỏ qua, không phải lỗi.
+  const picEmail = await loadPicEmailMap();
+  const email = picEmail.get(norm(node.pic));
+  if (!email) return { ok: false, reason: 'no_email', pic: node.pic };
+
+  const dedup_key = norm(node.pic);
+
+  // Đã gửi cho đúng PIC này ở bước này rồi thì thôi. Nếu bảng chưa tồn tại thì
+  // cứ gửi (bỏ dedupe) — thà gửi hơn im lặng.
+  const supabase = getSupabaseClient();
+  try {
+    const { data: seen } = await supabase
+      .from('sent_reminders')
+      .select('project_id')
+      .eq('project_id', projectId)
+      .eq('node_id', nodeId)
+      .eq('kind', 'assigned')
+      .eq('dedup_key', dedup_key)
+      .maybeSingle();
+    if (seen) return { ok: false, reason: 'already_sent' };
+  } catch (_e) {
+    // bỏ qua lỗi đọc bảng -> gửi luôn
+  }
+
+  const dates = computeAllDates({ project, nodes });
+  const due = dates[node.node_id]?.due;
+  const dueLabel = due
+    ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate())
+    : '—';
+
+  const item = { project, node, pic: node.pic, dueLabel, kind: 'assigned', dedup_key, email };
+  const res = await sendTextByEmail(email, composeMessage([item]));
+  if (res && res.code === 0) {
+    try {
+      await recordSent([item]);
+    } catch (_e) {
+      // gửi được là chính; ghi dedupe lỗi (vd chưa có bảng) thì bỏ qua.
+    }
+    return { ok: true, sent: 1, email };
+  }
+  return { ok: false, reason: 'send_failed', err: res?.msg };
+}
+
+module.exports = { runReminders, notifyAssignment };

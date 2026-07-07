@@ -47,7 +47,8 @@ async function tick() {
       }
     }
 
-    // 2) Nhắc việc cho PIC (DM) — 8–17h, mỗi giờ 1 lần.
+    // 2) Nhắc việc cho PIC (DM) — 8–17h, mỗi giờ 1 lần. Chỉ còn due_soon/overdue;
+    //    'việc mới giao' đã chuyển sang gửi ngay khi phân PIC (notifyAssignment).
     if (h >= START_HOUR && h <= END_HOUR) {
       const key = vnHourKey();
       if (key !== lastRunKey) {
@@ -79,7 +80,7 @@ function startReminderScheduler() {
     tick();
     setInterval(tick, 60000);
   }, msToNextMinute);
-  console.log('[reminders] scheduler bật — nhắc PIC 8–17h/giờ + báo cáo nhóm 9h sáng (giờ VN)');
+  console.log('[reminders] scheduler bật — quá hạn/sắp hạn 8–17h/giờ + báo cáo nhóm 9h sáng (giờ VN); việc mới giao gửi ngay khi phân PIC');
 }
 
 module.exports = { startReminderScheduler };
