@@ -156,7 +156,7 @@ function composeMessage(list) {
     );
     out.push('');
   }
-  out.push('Vui lòng cập nhật tiến độ trên Feelex QLDA. Cảm ơn bạn!');
+  out.push('Nhắn cập nhật cho tôi lúc xong hoặc cập nhật tiến độ trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!');
   return out.join('\n');
 }
 
