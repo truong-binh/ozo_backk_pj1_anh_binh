@@ -19,6 +19,7 @@ function requireAuth(req, res, next) {
       email: payload.email,
       role: payload.role,
       picName: payload.picName || null,
+      leadDepts: Array.isArray(payload.leadDepts) ? payload.leadDepts : [],
     };
     next();
   } catch {

@@ -66,8 +66,9 @@ async function patchProjectNode(req, res) {
       const nodeId = req.params.nodeId;
       const payload = req.body || {};
 
-      const { role, picName } = req.user || {};
-      // Quản lý sửa mọi bước. PIC chỉ sửa bước có pic = tên mình. Viewer: cấm.
+      const { role, picName, leadDepts } = req.user || {};
+      // Quản lý sửa mọi bước. Trưởng phòng sửa mọi bước thuộc phòng mình quản lý.
+      // PIC thường chỉ sửa bước có pic = tên mình. Viewer: cấm.
       if (role !== "manager") {
             if (role !== "PIC") {
                   return res
@@ -79,9 +80,14 @@ async function patchProjectNode(req, res) {
                   return res.status(404).json({ error: "Không tìm thấy bước" });
             }
             const owner = (node.pic || "").trim();
-            if (!owner || owner !== (picName || "").trim()) {
+            const nodeDept = (node.dept || "").trim();
+            const isLeaderOfDept =
+                  Array.isArray(leadDepts) && nodeDept && leadDepts.includes(nodeDept);
+            const isOwner = owner && owner === (picName || "").trim();
+            if (!isLeaderOfDept && !isOwner) {
                   return res.status(403).json({
-                        error: "Bạn chỉ được sửa dòng việc được gán cho mình",
+                        error:
+                              "Bạn chỉ được sửa bước của mình hoặc bước thuộc phòng bạn quản lý",
                   });
             }
       }

@@ -55,6 +55,48 @@ async function sendText(chatId, text) {
   return data;
 }
 
+// Chi tiết 1 user theo open_id (name, email, department_ids...). Cần scope contact:user.base:readonly.
+async function getUserDetail(openId) {
+  if (!openId) return null;
+  try {
+    const token = await getTenantAccessToken();
+    const res = await fetch(
+      `${larkDomain}/open-apis/contact/v3/users/${openId}?user_id_type=open_id&department_id_type=open_department_id`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json();
+    if (data.code !== 0) {
+      console.warn('Lark getUserDetail:', data.code, data.msg);
+      return null;
+    }
+    return data.data?.user || null;
+  } catch (err) {
+    console.warn('Lark getUserDetail exception:', err.message);
+    return null;
+  }
+}
+
+// Chi tiết 1 phòng ban theo open_department_id (name, leader_user_id...). Cần scope contact:department.base:readonly.
+async function getDepartment(deptId) {
+  if (!deptId) return null;
+  try {
+    const token = await getTenantAccessToken();
+    const res = await fetch(
+      `${larkDomain}/open-apis/contact/v3/departments/${deptId}?department_id_type=open_department_id&user_id_type=open_id`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json();
+    if (data.code !== 0) {
+      console.warn('Lark getDepartment:', data.code, data.msg);
+      return null;
+    }
+    return data.data?.department || null;
+  } catch (err) {
+    console.warn('Lark getDepartment exception:', err.message);
+    return null;
+  }
+}
+
 // Liệt kê các nhóm/chat mà bot đang là thành viên. Trả về [{ chat_id, name, chat_mode, ... }].
 async function listChats() {
   const token = await getTenantAccessToken();
@@ -117,4 +159,13 @@ async function getUserEmail(openId) {
   }
 }
 
-module.exports = { isLarkConfigured, getTenantAccessToken, sendText, sendTextByEmail, listChats, getUserEmail };
+module.exports = {
+  isLarkConfigured,
+  getTenantAccessToken,
+  sendText,
+  sendTextByEmail,
+  listChats,
+  getUserEmail,
+  getUserDetail,
+  getDepartment,
+};

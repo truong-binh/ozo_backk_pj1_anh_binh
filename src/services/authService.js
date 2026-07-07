@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { getSupabaseClient } = require('../config/supabaseClient');
 const { isMailConfigured, sendLoginCode } = require('../config/mailer');
+const { getMemberByEmail, leadDeptsOf } = require('./picMembersService');
 const {
   jwtSecret,
   jwtExpiresIn,
@@ -19,19 +20,14 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-// Vai trò cơ bản khi đăng nhập: PIC (nếu email nằm trong pic_members) hoặc viewer.
+// Vai trò khi đăng nhập: PIC (nếu email nằm trong pic_members) hoặc viewer.
+// Trưởng phòng (is_leader) là PIC có thêm leadDepts = [phòng mình quản lý].
 async function resolveRole(email) {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('pic_members')
-    .select('pic_name')
-    .eq('email', normalizeEmail(email))
-    .maybeSingle();
-  if (error) throw error;
-  if (data && data.pic_name) {
-    return { role: 'PIC', picName: data.pic_name };
+  const member = await getMemberByEmail(email);
+  if (member && member.pic_name) {
+    return { role: 'PIC', picName: member.pic_name, leadDepts: leadDeptsOf(member) };
   }
-  return { role: 'viewer', picName: null };
+  return { role: 'viewer', picName: null, leadDepts: [] };
 }
 
 function hashCode(email, code) {
@@ -153,7 +149,7 @@ async function verifyLoginCode(rawEmail, rawCode) {
   // Đúng mã -> tiêu thụ mã.
   await supabase.from('login_codes').update({ consumed: true }).eq('id', record.id);
 
-  const { role, picName } = await resolveRole(email);
+  const { role, picName, leadDepts } = await resolveRole(email);
 
   // Upsert user, ghi lại vai trò + tên PIC + thời điểm đăng nhập.
   const { data: user, error: upsertError } = await supabase
@@ -167,14 +163,14 @@ async function verifyLoginCode(rawEmail, rawCode) {
   if (upsertError) throw upsertError;
 
   const token = jwt.sign(
-    { sub: user.id, email: user.email, role, picName },
+    { sub: user.id, email: user.email, role, picName, leadDepts },
     jwtSecret,
     { expiresIn: jwtExpiresIn },
   );
 
   return {
     token,
-    user: { id: user.id, email: user.email, role, picName },
+    user: { id: user.id, email: user.email, role, picName, leadDepts },
   };
 }
 
@@ -190,12 +186,14 @@ function elevateToManager(currentUser, code) {
     err.status = 403;
     throw err;
   }
+  const leadDepts = currentUser.leadDepts || [];
   const token = jwt.sign(
     {
       sub: currentUser.id,
       email: currentUser.email,
       role: 'manager',
       picName: currentUser.picName || null,
+      leadDepts,
     },
     jwtSecret,
     { expiresIn: jwtExpiresIn },
@@ -207,6 +205,7 @@ function elevateToManager(currentUser, code) {
       email: currentUser.email,
       role: 'manager',
       picName: currentUser.picName || null,
+      leadDepts,
     },
   };
 }

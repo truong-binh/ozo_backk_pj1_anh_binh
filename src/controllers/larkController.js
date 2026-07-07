@@ -1,6 +1,7 @@
 const { larkVerifyToken } = require('../config/env');
 const { parseEventBody } = require('../services/lark/larkCrypto');
 const { handleMessageEvent } = require('../services/lark/eventHandler');
+const { handleMemberAdded } = require('../services/lark/memberSync');
 
 // Webhook nhận event từ Lark. Phải trả 200 nhanh (<3s) rồi xử lý nền.
 async function larkWebhook(req, res) {
@@ -35,6 +36,11 @@ async function larkWebhook(req, res) {
   if (eventType === 'im.message.receive_v1') {
     setImmediate(() => {
       handleMessageEvent(payload).catch((e) => console.error('Lark bg lỗi:', e));
+    });
+  } else if (eventType === 'im.chat.member.user.added_v1') {
+    // Có người được add vào nhóm -> đồng bộ tên/email/phòng vào pic_members.
+    setImmediate(() => {
+      handleMemberAdded(payload).catch((e) => console.error('Lark member-add lỗi:', e));
     });
   }
 }

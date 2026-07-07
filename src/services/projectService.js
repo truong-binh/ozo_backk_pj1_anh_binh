@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { getSupabaseClient } = require('../config/supabaseClient');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../constants/workflowNodes');
+const { leaderLabel } = require('./picMembersService');
 
 async function ensureMasterNodes() {
   const supabase = getSupabaseClient();
@@ -152,11 +153,12 @@ async function createProject(payload) {
     .order('code', { ascending: true });
   if (masterError) throw masterError;
 
+  // PIC mặc định của mỗi bước = nhãn vai trò "Trưởng phòng <phòng>" (không phải tên người).
   const rows = (masterNodes ?? []).map((n) => ({
     project_id: project.id,
     node_id: n.code,
     status: 'Chưa làm',
-    pic: '',
+    pic: leaderLabel(n.dept),
     duration: n.default_duration,
     actual_date: null,
     notes: '',

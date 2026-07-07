@@ -272,13 +272,19 @@ const tools = {
       parameters: { type: 'OBJECT', properties: {} },
     },
     async execute(_args, ctx) {
+      const leadDepts = Array.isArray(ctx.leadDepts) ? ctx.leadDepts : [];
+      const isLeader = leadDepts.length > 0;
       return {
         email: ctx.email || null,
         is_pic: !!ctx.authed,
         pic_name: ctx.picName || null,
-        can_edit: ctx.authed
-          ? 'Chỉ được sửa các bước có PIC = tên bạn.'
-          : 'Chỉ xem. Email Lark của bạn chưa nằm trong danh sách PIC.',
+        is_leader: isLeader,
+        lead_depts: leadDepts,
+        can_edit: !ctx.authed
+          ? 'Chỉ xem. Email Lark của bạn chưa nằm trong danh sách PIC.'
+          : isLeader
+            ? `Trưởng phòng ${leadDepts.join(', ')}: sửa mọi bước thuộc phòng này (kể cả đổi PIC), và các bước gán cho bạn.`
+            : 'Chỉ được sửa các bước có PIC = tên bạn.',
       };
     },
   },
@@ -287,7 +293,7 @@ const tools = {
     declaration: {
       name: 'update_node',
       description:
-        'CẬP NHẬT 1 bước của dự án (chỉ PIC phụ trách bước đó). Có thể đổi status, actual_date (YYYY-MM-DD), notes, duration. LUÔN xác nhận lại với người dùng trước khi ghi.',
+        'CẬP NHẬT 1 bước của dự án. Quyền: PIC phụ trách bước đó, hoặc TRƯỞNG PHÒNG của phòng phụ trách bước đó (được đổi cả PIC). Có thể đổi status, actual_date (YYYY-MM-DD), notes, duration, pic. LUÔN xác nhận lại với người dùng trước khi ghi.',
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -300,6 +306,10 @@ const tools = {
           actual_date: { type: 'STRING', description: 'ngày hoàn thành thực tế YYYY-MM-DD' },
           notes: { type: 'STRING', description: 'ghi chú' },
           duration: { type: 'NUMBER', description: 'số ngày thực hiện' },
+          pic: {
+            type: 'STRING',
+            description: 'gán/đổi người phụ trách (PIC) — chỉ trưởng phòng/quản lý nên dùng',
+          },
         },
         required: ['query', 'node_code'],
       },
@@ -319,9 +329,13 @@ const tools = {
       if (!node) return { error: `Dự án ${match.code} không có bước ${nodeCode}.` };
 
       const owner = (node.pic || '').trim();
-      if (!owner || owner !== (ctx.picName || '').trim()) {
+      const nodeDept = (node.dept || '').trim();
+      const isLeaderOfDept =
+        Array.isArray(ctx.leadDepts) && nodeDept && ctx.leadDepts.includes(nodeDept);
+      const isOwner = owner && owner === (ctx.picName || '').trim();
+      if (!isLeaderOfDept && !isOwner) {
         return {
-          error: `Bước ${nodeCode} do "${owner || 'chưa gán'}" phụ trách, không phải bạn (${ctx.picName}). Bạn chỉ sửa được bước của mình.`,
+          error: `Bước ${nodeCode} do "${owner || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ sửa được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
         };
       }
 
@@ -344,6 +358,13 @@ const tools = {
         const d = Number(args.duration);
         if (!Number.isFinite(d) || d < 0) return { error: 'duration phải là số >= 0.' };
         payload.duration = d;
+      }
+      if (args.pic !== undefined) {
+        // Chỉ trưởng phòng của phòng bước đó (hoặc quản lý) mới được đổi PIC.
+        if (!isLeaderOfDept) {
+          return { error: 'Chỉ trưởng phòng của phòng phụ trách bước này mới được đổi PIC.' };
+        }
+        payload.pic = String(args.pic || '').trim();
       }
       if (Object.keys(payload).length === 0) {
         return { error: 'Không có gì để cập nhật.' };
