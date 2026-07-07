@@ -97,6 +97,21 @@ async function getDepartment(deptId) {
   }
 }
 
+// Liệt kê thành viên 1 nhóm theo open_id. Trả [{ member_id, name, ... }].
+async function listChatMembers(chatId) {
+  const token = await getTenantAccessToken();
+  const res = await fetch(
+    `${larkDomain}/open-apis/im/v1/chats/${chatId}/members?member_id_type=open_id&page_size=100`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const data = await res.json();
+  if (data.code !== 0) {
+    console.error('Lark listChatMembers lỗi:', data.code, data.msg);
+    return [];
+  }
+  return data.data?.items || [];
+}
+
 // Liệt kê các nhóm/chat mà bot đang là thành viên. Trả về [{ chat_id, name, chat_mode, ... }].
 async function listChats() {
   const token = await getTenantAccessToken();
@@ -165,6 +180,7 @@ module.exports = {
   sendText,
   sendTextByEmail,
   listChats,
+  listChatMembers,
   getUserEmail,
   getUserDetail,
   getDepartment,
