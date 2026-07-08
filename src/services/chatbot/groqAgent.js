@@ -11,12 +11,16 @@ function sleep(ms) {
 }
 
 // Chuyển schema kiểu Gemini (type IN HOA) -> JSON Schema chuẩn OpenAI (type thường).
+// Với field số: cho phép CẢ number lẫn string vì Llama/Groq hay xuất số dưới dạng
+// chuỗi ("15") rồi Groq validate strict -> 400. execute() đã Number() ép kiểu lại.
 function lowerSchema(s) {
   if (!s || typeof s !== 'object') return s;
   const out = {};
   for (const k of Object.keys(s)) {
-    if (k === 'type' && typeof s[k] === 'string') out[k] = s[k].toLowerCase();
-    else if (k === 'properties') {
+    if (k === 'type' && typeof s[k] === 'string') {
+      const t = s[k].toLowerCase();
+      out[k] = t === 'number' || t === 'integer' ? [t, 'string'] : t;
+    } else if (k === 'properties') {
       out[k] = {};
       for (const p of Object.keys(s[k])) out[k][p] = lowerSchema(s[k][p]);
     } else if (k === 'items') out[k] = lowerSchema(s[k]);
