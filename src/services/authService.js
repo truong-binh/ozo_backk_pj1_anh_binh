@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { getSupabaseClient } = require('../config/supabaseClient');
 const { isMailConfigured, sendLoginCode } = require('../config/mailer');
-const { getMemberByEmail, leadDeptsOf } = require('./picMembersService');
+const { getMemberByEmail, getMemberByOpenId, leadDeptsOf } = require('./picMembersService');
 const {
   jwtSecret,
   jwtExpiresIn,
@@ -28,6 +28,20 @@ async function resolveRole(email) {
     return { role: 'PIC', picName: member.pic_name, leadDepts: leadDeptsOf(member) };
   }
   return { role: 'viewer', picName: null, leadDepts: [] };
+}
+
+// Vai trò theo open_id Lark (đăng nhập qua bot). Kèm email nếu member có.
+async function resolveRoleByOpenId(openId) {
+  const member = await getMemberByOpenId(openId);
+  if (member && member.pic_name) {
+    return {
+      role: 'PIC',
+      picName: member.pic_name,
+      leadDepts: leadDeptsOf(member),
+      email: member.email || null,
+    };
+  }
+  return { role: 'viewer', picName: null, leadDepts: [], email: null };
 }
 
 function hashCode(email, code) {
@@ -174,6 +188,142 @@ async function verifyLoginCode(rawEmail, rawCode) {
   };
 }
 
+// === Đăng nhập qua bot Lark (không cần email) ===
+// Bot gọi khi user nhắn "đăng nhập": cấp OTP gắn với open_id, DM lại cho họ.
+// Chỉ cấp cho người là PIC (có trong pic_members). Trả { ok, code, ttlMinutes }.
+async function issueLoginCodeForOpenId(openId) {
+  const oid = String(openId || '').trim();
+  if (!oid) return { ok: false, reason: 'no_open_id' };
+
+  const member = await getMemberByOpenId(oid);
+  if (!member || !member.pic_name) {
+    return { ok: false, reason: 'not_pic' };
+  }
+
+  const supabase = getSupabaseClient();
+  const code = generateCode();
+  const codeHash = hashCode(oid, code); // gắn mã với open_id
+  const expiresAt = new Date(Date.now() + otpTtlMinutes * 60_000).toISOString();
+
+  // Vô hiệu các mã cũ chưa dùng của open_id này.
+  await supabase
+    .from('login_codes')
+    .update({ consumed: true })
+    .eq('open_id', oid)
+    .eq('consumed', false);
+
+  const { error } = await supabase.from('login_codes').insert([
+    {
+      open_id: oid,
+      email: member.email || null,
+      code_hash: codeHash,
+      expires_at: expiresAt,
+      consumed: false,
+      attempts: 0,
+    },
+  ]);
+  if (error) throw error;
+
+  return { ok: true, code, ttlMinutes: otpTtlMinutes, picName: member.pic_name };
+}
+
+// Tạo/cập nhật app_users theo open_id (email có thể null với người dùng SĐT).
+async function upsertAppUserByOpenId({ openId, email, role, picName }) {
+  const supabase = getSupabaseClient();
+  const nowIso = new Date().toISOString();
+
+  // Tìm dòng hiện có: ưu tiên open_id, rồi email (dữ liệu cũ đăng nhập bằng mail).
+  let existing = null;
+  {
+    const { data } = await supabase.from('app_users').select('*').eq('open_id', openId).maybeSingle();
+    if (data) existing = data;
+  }
+  if (!existing && email) {
+    const { data } = await supabase.from('app_users').select('*').eq('email', email).maybeSingle();
+    if (data) existing = data;
+  }
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from('app_users')
+      .update({ open_id: openId, email: email || existing.email || null, role, name: picName, last_login_at: nowIso })
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await supabase
+    .from('app_users')
+    .insert([{ open_id: openId, email: email || null, role, name: picName, last_login_at: nowIso }])
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Web nhập OTP (chỉ mã, không email) -> tìm mã theo open_id -> phát JWT.
+// Web tự biết PIC nào vì mã đã gắn với open_id lúc bot cấp.
+async function verifyLoginByBotCode(rawCode) {
+  const code = String(rawCode || '').trim();
+  if (!/^\d{6}$/.test(code)) {
+    const err = new Error('Mã không hợp lệ'); err.status = 400; throw err;
+  }
+
+  const supabase = getSupabaseClient();
+  const nowIso = new Date().toISOString();
+  const { data: rows, error } = await supabase
+    .from('login_codes')
+    .select('*')
+    .eq('consumed', false)
+    .not('open_id', 'is', null)
+    .gt('expires_at', nowIso)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) throw error;
+
+  // Chỉ có mã (không open_id) -> thử khớp hash với từng ứng viên còn hiệu lực.
+  const matches = [];
+  for (const r of rows || []) {
+    const expected = hashCode(r.open_id, code);
+    if (
+      r.code_hash &&
+      r.code_hash.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(r.code_hash), Buffer.from(expected))
+    ) {
+      matches.push(r);
+    }
+  }
+  if (matches.length === 0) {
+    const err = new Error('Mã không đúng hoặc đã hết hạn. Nhắn "đăng nhập" cho bot để lấy mã mới.');
+    err.status = 400;
+    throw err;
+  }
+  // Hiếm: 2 người cùng mã đang hiệu lực -> không xác định được ai, buộc lấy mã mới.
+  if (matches.length > 1) {
+    const err = new Error('Mã bị trùng, không xác định được tài khoản. Nhắn "đăng nhập" cho bot để lấy mã mới.');
+    err.status = 409;
+    throw err;
+  }
+  const record = matches[0];
+
+  await supabase.from('login_codes').update({ consumed: true }).eq('id', record.id);
+
+  const { role, picName, leadDepts, email } = await resolveRoleByOpenId(record.open_id);
+  const user = await upsertAppUserByOpenId({ openId: record.open_id, email, role, picName });
+
+  const token = jwt.sign(
+    { sub: user.id, email: email || null, role, picName, leadDepts, openId: record.open_id },
+    jwtSecret,
+    { expiresIn: jwtExpiresIn },
+  );
+
+  return {
+    token,
+    user: { id: user.id, email: email || null, role, picName, leadDepts },
+  };
+}
+
 // Nâng quyền lên Quản lý bằng mã bí mật chung -> phát JWT mới role='manager'.
 function elevateToManager(currentUser, code) {
   if (!managerCode) {
@@ -228,6 +378,8 @@ async function getUserById(id) {
 module.exports = {
   requestLoginCode,
   verifyLoginCode,
+  issueLoginCodeForOpenId,
+  verifyLoginByBotCode,
   elevateToManager,
   verifyToken,
   getUserById,

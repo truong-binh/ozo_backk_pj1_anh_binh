@@ -2,6 +2,50 @@ const { getUserEmail, sendText } = require('./larkClient');
 const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
+const { issueLoginCodeForOpenId } = require('../authService');
+
+// Bỏ dấu tiếng Việt để nhận diện lệnh (đ->d).
+function stripAccent(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
+// Người dùng xin mã đăng nhập web? (đăng nhập / login / otp / lấy mã ...)
+function isLoginRequest(text) {
+  const t = stripAccent(text).toLowerCase().trim();
+  return /^(dang nhap|dangnhap|login|otp|lay ma|xin ma|ma dang nhap|ma web)\b/.test(t);
+}
+
+// Cấp mã đăng nhập web cho đúng người nhắn (theo open_id), DM lại trong chat 1-1.
+async function handleLoginRequest(chatId, openId, chatType) {
+  if (chatType && chatType !== 'p2p') {
+    await sendText(chatId, '🔐 Để lấy mã đăng nhập web, bạn hãy nhắn RIÊNG (1-1) cho mình chữ "đăng nhập" nhé.');
+    return;
+  }
+  try {
+    const res = await issueLoginCodeForOpenId(openId);
+    if (!res.ok) {
+      if (res.reason === 'not_pic') {
+        await sendText(chatId, 'Tài khoản Lark của bạn chưa nằm trong danh sách PIC nên chưa đăng nhập web được. Vui lòng liên hệ quản lý để được thêm vào.');
+      } else {
+        await sendText(chatId, 'Chưa cấp được mã đăng nhập. Bạn thử lại sau nhé.');
+      }
+      return;
+    }
+    await sendText(
+      chatId,
+      `🔐 Mã đăng nhập Feelex QLDA của bạn: ${res.code}\n` +
+        `Hiệu lực ${res.ttlMinutes} phút. Nhập mã này trên web để đăng nhập với tên "${res.picName}".\n` +
+        '⚠️ Không chia sẻ mã này cho bất kỳ ai.',
+    );
+  } catch (err) {
+    console.error('[login-otp] lỗi:', err.message);
+    await sendText(chatId, '⚠️ Có lỗi khi cấp mã đăng nhập. Bạn thử lại sau nhé.');
+  }
+}
 
 // --- Chống xử lý trùng event (Lark hay retry) ---
 const seenEvents = new Map();
@@ -46,6 +90,12 @@ async function handleMessageEvent(evt) {
     if (message.message_type !== 'text') {
       await sendText(chatId, 'Hiện mình chỉ đọc được tin nhắn văn bản. Bạn gõ câu hỏi giúp mình nhé.');
     }
+    return;
+  }
+
+  // Xin mã đăng nhập web -> cấp OTP theo open_id, DM lại (không đưa vào AI agent).
+  if (isLoginRequest(text)) {
+    await handleLoginRequest(chatId, openId, message.chat_type);
     return;
   }
 
