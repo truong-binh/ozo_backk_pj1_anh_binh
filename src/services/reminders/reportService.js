@@ -6,6 +6,7 @@ const { listProjectsWithNodes } = require('../projectService');
 const { computeAllDates } = require('../../utils/datePlanner');
 const { sendText, listChats } = require('../lark/larkClient');
 const { getSupabaseClient } = require('../../config/supabaseClient');
+const { isLeaderLabel } = require('../picMembersService');
 const { larkReportChatId, appUrl } = require('../../config/env');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -47,6 +48,18 @@ function fmtDMY(y, m, d) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
 }
 
+// Nhãn PIC hiển thị trên báo cáo:
+//  - có người   -> "Tên người - Phòng"
+//  - nhãn vai trò ("Trưởng phòng X") -> giữ nguyên (đã có tên phòng)
+//  - chưa gán   -> "chưa gán - Phòng" (biết phòng nào cần phân), hoặc "chưa gán"
+function picLabel(node) {
+  const name = node.pic && String(node.pic).trim();
+  const dept = node.dept && String(node.dept).trim();
+  if (!name) return dept ? `chưa gán - ${dept}` : 'chưa gán';
+  if (isLeaderLabel(name)) return name;
+  return dept ? `${name} - ${dept}` : name;
+}
+
 async function computeReport() {
   const today = vnToday();
   const projects = await listProjectsWithNodes();
@@ -65,7 +78,7 @@ async function computeReport() {
       const rec = {
         project,
         node,
-        pic: node.pic && String(node.pic).trim() ? node.pic : '—',
+        pic: picLabel(node),
         dueLabel: fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()),
         diff,
       };
