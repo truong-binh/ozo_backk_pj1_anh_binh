@@ -17,23 +17,30 @@ async function resolvePicByOpenId(openId) {
       openId: oid,
       email: member.email || '',
       picName: member.pic_name,
+      dept: member.dept || null,
       leadDepts: leadDeptsOf(member),
     };
   }
-  return { authed: false, openId: oid, email: '', picName: null, leadDepts: [] };
+  return { authed: false, openId: oid, email: '', picName: null, dept: null, leadDepts: [] };
 }
 
 // Tra pic_members theo email -> { authed, email, picName, leadDepts }.
 // Dùng để quyết định quyền GHI của người gửi Lark (PIC hoặc trưởng phòng).
 async function resolvePicByEmail(rawEmail) {
   const email = normalizeEmail(rawEmail);
-  if (!email) return { authed: false, email: '', picName: null, leadDepts: [] };
+  if (!email) return { authed: false, email: '', picName: null, dept: null, leadDepts: [] };
 
   const member = await getMemberByEmail(email);
   if (member && member.pic_name) {
-    return { authed: true, email, picName: member.pic_name, leadDepts: leadDeptsOf(member) };
+    return {
+      authed: true,
+      email,
+      picName: member.pic_name,
+      dept: member.dept || null,
+      leadDepts: leadDeptsOf(member),
+    };
   }
-  return { authed: false, email, picName: null, leadDepts: [] };
+  return { authed: false, email, picName: null, dept: null, leadDepts: [] };
 }
 
 module.exports = { resolvePicByEmail, resolvePicByOpenId, normalizeEmail };

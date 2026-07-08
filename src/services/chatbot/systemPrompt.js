@@ -18,8 +18,13 @@ const DEPT_GLOSSARY = `
 - Sale: Kinh doanh`.trim();
 
 function buildSystemPrompt(ctx) {
+  const leadDepts = Array.isArray(ctx.leadDepts) ? ctx.leadDepts : [];
   const who = ctx.authed
-    ? `Người đang chat: ${ctx.picName}${ctx.email ? ` (email ${ctx.email})` : ''} — là PIC, ĐƯỢC sửa các bước có PIC = "${ctx.picName}".`
+    ? `Người đang chat: ${ctx.picName}${ctx.dept ? `, phòng ${ctx.dept}` : ''}${ctx.email ? ` (email ${ctx.email})` : ''} — là PIC.${
+        leadDepts.length
+          ? ` TRƯỞNG PHÒNG ${leadDepts.join(', ')}: được sửa MỌI bước thuộc phòng này (kể cả đổi PIC).`
+          : ' PIC thường: chỉ sửa bước có PIC = tên bạn (chuyển được cho PIC khác CÙNG PHÒNG).'
+      }`
     : `Người đang chat: ${ctx.picName || ctx.email || 'chưa rõ'} — CHỈ XEM (không nằm trong danh sách PIC, không được ghi).`;
 
   const today = new Date();

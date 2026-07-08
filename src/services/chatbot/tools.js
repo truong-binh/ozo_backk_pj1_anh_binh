@@ -279,13 +279,14 @@ const tools = {
         email: ctx.email || null,
         is_pic: !!ctx.authed,
         pic_name: ctx.picName || null,
+        dept: ctx.dept || null,
         is_leader: isLeader,
         lead_depts: leadDepts,
         can_edit: !ctx.authed
           ? 'Chỉ xem. Email Lark của bạn chưa nằm trong danh sách PIC.'
           : isLeader
             ? `Trưởng phòng ${leadDepts.join(', ')}: sửa mọi bước thuộc phòng này (kể cả đổi PIC), và các bước gán cho bạn.`
-            : 'Sửa các bước có PIC = tên bạn; được chuyển bước của mình cho PIC khác CÙNG PHÒNG.',
+            : `Thuộc phòng ${ctx.dept || '—'}. Sửa các bước có PIC = tên bạn; được chuyển bước của mình cho PIC khác CÙNG PHÒNG. (Bạn KHÔNG phải trưởng phòng nên không sửa được mọi bước của phòng.)`,
       };
     },
   },
