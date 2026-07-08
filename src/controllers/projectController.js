@@ -12,7 +12,10 @@ const {
       seedFromPayload,
 } = require("../services/projectService");
 const { findMemberByName } = require("../services/picMembersService");
-const { notifyAssignment } = require("../services/reminders/reminderService");
+const {
+      notifyAssignment,
+      notifyNewProjectAssignments,
+} = require("../services/reminders/reminderService");
 
 async function getProjects(req, res) {
       const data = await listProjects();
@@ -48,6 +51,13 @@ async function postProject(req, res) {
             owner: owner || null,
             start_date,
       });
+
+      // Tạo xong -> gửi tin GIAO VIỆC cho từng người phụ trách (nhãn "Trưởng phòng
+      // X" quy về trưởng phòng thật). Chạy nền, không chặn phản hồi.
+      notifyNewProjectAssignments(created.id).catch((e) =>
+            console.error("[new-project-notify] lỗi:", e.message),
+      );
+
       res.status(201).json(created);
 }
 

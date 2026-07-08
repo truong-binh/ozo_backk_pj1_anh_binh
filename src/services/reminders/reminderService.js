@@ -11,6 +11,7 @@ const { getSupabaseClient } = require('../../config/supabaseClient');
 const { computeAllDates } = require('../../utils/datePlanner');
 const { sendTextByEmail, sendTextByOpenId, isLarkConfigured } = require('../lark/larkClient');
 const { remindersEnabled } = require('../../config/env');
+const { getDeptLeaderMap, isLeaderLabel, deptFromLeaderLabel } = require('../picMembersService');
 
 const TZ = 'Asia/Ho_Chi_Minh';
 const DONE = new Set(['Đã xong', 'Bỏ qua']);
@@ -51,6 +52,31 @@ async function loadPicContactMap() {
     }
   }
   return map;
+}
+
+// Bản đồ dept -> liên hệ TRƯỞNG PHÒNG (để quy nhãn "Trưởng phòng X" về người thật).
+// Chỉ dùng cho TIN GIAO VIỆC (assigned), KHÔNG dùng cho nhắc hạn/báo cáo nhóm.
+async function loadLeaderContactMap(contactMap) {
+  const deptLeader = await getDeptLeaderMap(); // { dept: pic_name }
+  const map = new Map();
+  for (const [dept, picName] of Object.entries(deptLeader || {})) {
+    const c = contactMap.get(norm(picName));
+    if (c && (c.open_id || c.email)) map.set(dept, c);
+  }
+  return map;
+}
+
+// Tìm liên hệ để GIAO VIỆC: theo tên PIC trong danh bạ; nếu là nhãn "Trưởng phòng
+// X" thì quy về trưởng phòng của phòng X. Trả contact | null.
+function resolveAssignContact(pic, contactMap, leaderMap) {
+  const direct = contactMap.get(norm(pic));
+  if (direct && (direct.open_id || direct.email)) return direct;
+  if (isLeaderLabel(pic)) {
+    const dept = deptFromLeaderLabel(pic);
+    const l = leaderMap.get(dept);
+    if (l && (l.open_id || l.email)) return l;
+  }
+  return null;
 }
 
 // Duyệt tất cả dự án -> danh sách nhắc ứng viên (chưa dedupe, chưa gắn email).
@@ -329,4 +355,69 @@ async function notifyAssignment(projectId, nodeId) {
   return { ok: false, reason: 'send_failed', err: res?.msg };
 }
 
-module.exports = { runReminders, notifyAssignment };
+// Gửi TIN GIAO VIỆC khi vừa TẠO DỰ ÁN mới: gom theo người nhận -> 1 tin tóm tắt/
+// người liệt kê các bước họ phụ trách. Nhãn "Trưởng phòng X" -> gửi trưởng phòng
+// thật; PIC là người thật -> gửi thẳng. Dedupe qua sent_reminders (kind 'assigned',
+// dedup_key = norm(pic)) để không trùng với notifyAssignment sau này.
+// Không ném lỗi ra ngoài (chạy nền sau khi tạo dự án).
+async function notifyNewProjectAssignments(projectId) {
+  if (!remindersEnabled || !isLarkConfigured) return { ok: false, reason: 'disabled' };
+
+  const { project, nodes } = await getProjectDetail(projectId);
+  const contactMap = await loadPicContactMap();
+  const leaderMap = await loadLeaderContactMap(contactMap);
+  const dates = computeAllDates({ project, nodes });
+
+  const items = [];
+  for (const node of nodes) {
+    if (!node.pic || !String(node.pic).trim()) continue;
+    if (DONE.has(node.status)) continue;
+    const contact = resolveAssignContact(node.pic, contactMap, leaderMap);
+    if (!contact) continue;
+    const due = dates[node.node_id]?.due;
+    items.push({
+      project,
+      node,
+      pic: node.pic,
+      dueLabel: due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—',
+      kind: 'assigned',
+      dedup_key: norm(node.pic),
+      contact,
+      email: contact.email || null,
+    });
+  }
+  if (!items.length) return { ok: true, sent: 0, note: 'no_contact_pic' };
+
+  // Bỏ các bước đã báo trước đó (nếu bảng tồn tại).
+  let remaining = items;
+  try {
+    const filtered = await filterUnsent(items);
+    remaining = filtered.remaining;
+  } catch (err) {
+    if (err.code !== 'NO_TABLE') throw err;
+  }
+  if (!remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
+
+  // Gom theo người nhận -> 1 tin/người.
+  const byPerson = new Map();
+  for (const it of remaining) {
+    const key = it.contact.open_id || it.contact.email;
+    if (!byPerson.has(key)) byPerson.set(key, { contact: it.contact, list: [] });
+    byPerson.get(key).list.push(it);
+  }
+
+  const sentItems = [];
+  for (const [, { contact, list }] of byPerson) {
+    const res = await sendToContact(contact, composeMessage(list));
+    if (res && res.code === 0) sentItems.push(...list);
+  }
+  try {
+    await recordSent(sentItems);
+  } catch (_e) {
+    // bảng chưa có -> đã gửi là chính, bỏ qua ghi dedupe.
+  }
+
+  return { ok: true, people: byPerson.size, sent: sentItems.length };
+}
+
+module.exports = { runReminders, notifyAssignment, notifyNewProjectAssignments };
