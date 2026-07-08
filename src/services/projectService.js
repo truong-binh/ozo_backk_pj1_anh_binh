@@ -3,6 +3,44 @@ const path = require('node:path');
 const { getSupabaseClient } = require('../config/supabaseClient');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../constants/workflowNodes');
 const { leaderLabel } = require('./picMembersService');
+const { computeAllDates, isoLocal } = require('../utils/datePlanner');
+
+// Baseline "ngày dự kiến": tính kế hoạch gốc từ start_date + duration + after,
+// BỎ QUA ngày thực tế (để mốc không trôi khi các bước hoàn thành sớm/muộn).
+function baselinePlannedDates(project, nodes) {
+  const detail = {
+    project,
+    nodes: nodes.map((n) => ({
+      node_id: n.node_id,
+      after: n.after || [],
+      duration: n.duration,
+      status: n.status,
+      actual_date: null,
+    })),
+  };
+  const dates = computeAllDates(detail);
+  const out = {};
+  for (const n of nodes) {
+    const d = dates[n.node_id];
+    out[n.node_id] = d ? isoLocal(d.due) : null;
+  }
+  return out;
+}
+
+// Insert/upsert node kèm planned_date; nếu DB chưa có cột thì bỏ cột đó rồi thử lại
+// (để chạy được cả trước khi chạy sql/planned-date.sql).
+async function writeNodes(supabase, rows, { upsert = false } = {}) {
+  const run = (data) =>
+    upsert
+      ? supabase.from('project_nodes').upsert(data, { onConflict: 'project_id,node_id' })
+      : supabase.from('project_nodes').insert(data);
+  let { error } = await run(rows);
+  if (error && /planned_date/i.test(error.message || '')) {
+    const stripped = rows.map(({ planned_date, ...rest }) => rest);
+    ({ error } = await run(stripped));
+  }
+  if (error) throw error;
+}
 
 async function ensureMasterNodes() {
   const supabase = getSupabaseClient();
@@ -205,8 +243,10 @@ async function createProject(payload) {
   }));
 
   if (rows.length) {
-    const { error: nodesError } = await supabase.from('project_nodes').insert(rows);
-    if (nodesError) throw nodesError;
+    // Chốt mốc ngày dự kiến cố định ngay lúc tạo dự án.
+    const plannedMap = baselinePlannedDates(project, rows);
+    for (const r of rows) r.planned_date = plannedMap[r.node_id] || null;
+    await writeNodes(supabase, rows);
   }
 
   return project;
@@ -271,10 +311,9 @@ async function upsertProjectFromJsonRow(projectJson) {
   });
 
   if (nodes.length > 0) {
-    const { error: nodesError } = await supabase
-      .from('project_nodes')
-      .upsert(nodes, { onConflict: 'project_id,node_id' });
-    if (nodesError) throw nodesError;
+    const plannedMap = baselinePlannedDates(project, nodes);
+    for (const n of nodes) n.planned_date = plannedMap[n.node_id] || null;
+    await writeNodes(supabase, nodes, { upsert: true });
   }
 
   return project;
