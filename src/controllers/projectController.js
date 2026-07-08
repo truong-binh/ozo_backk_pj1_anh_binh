@@ -116,6 +116,17 @@ async function patchProjectNode(req, res) {
             }
       }
 
+      // Chuẩn hoá tên PIC về đúng danh bạ (vd "Ly" -> "Phạm Khánh Ly") để khớp
+      // nhắc việc/báo cáo. Không tìm thấy -> giữ nguyên (cho phép người ngoài danh bạ).
+      // Nhãn vai trò "Trưởng phòng ..." giữ nguyên, không dò danh bạ.
+      if (payload.pic !== undefined && String(payload.pic).trim()) {
+            const raw = String(payload.pic).trim();
+            if (!raw.startsWith("Trưởng phòng ")) {
+                  const canon = await findMemberByName(raw);
+                  if (canon) payload.pic = canon.pic_name;
+            }
+      }
+
       // Tự động: điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong'.
       if (payload.actual_date && payload.status === undefined) {
             payload.status = "Đã xong";

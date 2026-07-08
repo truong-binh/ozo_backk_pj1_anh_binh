@@ -363,8 +363,10 @@ const tools = {
       if (args.pic !== undefined) {
         const newPic = String(args.pic || '').trim();
         if (isLeaderOfDept) {
-          // Trưởng phòng: gán cho ai cũng được (trong phòng mình quản lý).
-          payload.pic = newPic;
+          // Trưởng phòng: gán cho ai cũng được. Chuẩn hoá tên về đúng danh bạ
+          // ("Ly" -> "Phạm Khánh Ly") để khớp nhắc việc; ngoài danh bạ giữ nguyên.
+          const canon = await findMemberByName(newPic);
+          payload.pic = canon ? canon.pic_name : newPic;
         } else {
           // PIC thường (chủ bước): chỉ được CHUYỂN bước cho PIC khác CÙNG PHÒNG với bước.
           if (!newPic) return { error: 'Tên PIC mới đang trống.' };
