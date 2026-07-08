@@ -65,9 +65,11 @@ async function getProjectDetail(projectId) {
 
 async function getProjectNode(projectId, nodeId) {
   const supabase = getSupabaseClient();
+  // Cần cả `dept` để kiểm quyền TRƯỞNG PHÒNG (isLeaderOfDept) ở web & chatbot,
+  // và `status` để dùng khi cần. Thiếu dept -> leader luôn bị coi là không phải leader.
   const { data, error } = await supabase
     .from('project_nodes')
-    .select('pic')
+    .select('pic,dept,status')
     .eq('project_id', projectId)
     .eq('node_id', nodeId)
     .maybeSingle();
