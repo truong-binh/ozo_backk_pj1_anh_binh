@@ -144,8 +144,8 @@ async function patchProjectNode(req, res) {
 
       const data = await updateProjectNode(projectId, nodeId, payload);
 
-      // Bước vừa 'Đã xong' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
-      if (data.status === "Đã xong") {
+      // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
+      if (data.status === "Đã xong" || data.status === "Bỏ qua") {
             await startReadySuccessors(projectId, nodeId);
       }
 

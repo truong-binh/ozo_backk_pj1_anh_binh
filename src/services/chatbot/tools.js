@@ -9,6 +9,7 @@ const {
   getProjectDetail,
   getProjectNode,
   updateProjectNode,
+  startReadySuccessors,
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
@@ -389,6 +390,10 @@ const tools = {
       }
 
       const updated = await updateProjectNode(match.id, nodeCode, payload);
+      // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp sang 'Đang làm'.
+      if (updated.status === 'Đã xong' || updated.status === 'Bỏ qua') {
+        await startReadySuccessors(match.id, nodeCode);
+      }
       return {
         ok: true,
         project: match.code,
