@@ -175,11 +175,14 @@ function composeMessage(list) {
   for (const it of list) byKind[it.kind].push(it);
 
   const line = (it) => `• [${it.project.code}] ${it.node.node_id} – ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
+  // Việc mới được giao: kèm TÊN dự án để PIC biết ngay thuộc dự án nào.
+  const assignedLine = (it) =>
+    `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
   const out = ['📋 Nhắc việc – Feelex QLDA', ''];
 
   if (byKind.assigned.length) {
     out.push('🔔 Việc mới được giao:');
-    byKind.assigned.forEach((it) => out.push(line(it)));
+    byKind.assigned.forEach((it) => out.push(assignedLine(it)));
     out.push('');
   }
   if (byKind.due_soon.length) {

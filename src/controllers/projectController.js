@@ -88,6 +88,10 @@ async function patchProjectNode(req, res) {
                         .status(403)
                         .json({ error: "Bạn không có quyền sửa" });
             }
+            // Phòng / Số ngày / Sau bước: chỉ cấp quản lý (nhập mã) mới được sửa.
+            // Loại khỏi payload (thay vì chặn cả request) để không phá luồng đổi PIC.
+            // PIC chỉ chuyển trong cùng phòng nên 'dept' của bước không cần đổi.
+            for (const f of ["dept", "duration", "after"]) delete payload[f];
             const node = await getProjectNode(projectId, nodeId);
             if (!node) {
                   return res.status(404).json({ error: "Không tìm thấy bước" });
@@ -140,6 +144,13 @@ async function patchProjectNode(req, res) {
       // Tự động: điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong'.
       if (payload.actual_date && payload.status === undefined) {
             payload.status = "Đã xong";
+      }
+
+      // Sau khi lọc quyền, nếu không còn gì để cập nhật -> trả về bước hiện tại.
+      if (Object.keys(payload).length === 0) {
+            const detail = await getProjectDetail(projectId);
+            const current = detail.nodes.find((n) => n.node_id === nodeId);
+            return res.json(current || {});
       }
 
       const data = await updateProjectNode(projectId, nodeId, payload);

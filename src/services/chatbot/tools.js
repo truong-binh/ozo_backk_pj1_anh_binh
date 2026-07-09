@@ -308,7 +308,6 @@ const tools = {
           },
           actual_date: { type: 'STRING', description: 'ngày hoàn thành thực tế YYYY-MM-DD' },
           notes: { type: 'STRING', description: 'ghi chú' },
-          duration: { type: 'NUMBER', description: 'số ngày thực hiện' },
           pic: {
             type: 'STRING',
             description: 'gán/đổi người phụ trách (PIC) — chỉ trưởng phòng/quản lý nên dùng',
@@ -357,11 +356,8 @@ const tools = {
         payload.actual_date = args.actual_date || null;
       }
       if (args.notes !== undefined) payload.notes = args.notes;
-      if (args.duration !== undefined) {
-        const d = Number(args.duration);
-        if (!Number.isFinite(d) || d < 0) return { error: 'duration phải là số >= 0.' };
-        payload.duration = d;
-      }
+      // Số ngày (duration), Phòng (dept), Sau bước (after): chỉ cấp quản lý (nhập mã
+      // trên web) mới sửa — chatbot chỉ xác thực PIC nên không cho sửa các trường này.
       if (args.pic !== undefined) {
         const newPic = String(args.pic || '').trim();
         if (isLeaderOfDept) {
