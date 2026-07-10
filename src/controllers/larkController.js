@@ -1,6 +1,10 @@
 const { larkVerifyToken } = require('../config/env');
 const { parseEventBody } = require('../services/lark/larkCrypto');
-const { handleMessageEvent, handleCardAction } = require('../services/lark/eventHandler');
+const {
+  handleMessageEvent,
+  handleCardAction,
+  handleBotMenuEvent,
+} = require('../services/lark/eventHandler');
 const { handleMemberAdded } = require('../services/lark/memberSync');
 
 // Webhook nhận event từ Lark. Phải trả 200 nhanh (<3s) rồi xử lý nền.
@@ -54,6 +58,11 @@ async function larkWebhook(req, res) {
     // Có người được add vào nhóm -> đồng bộ tên/email/phòng vào pic_members.
     setImmediate(() => {
       handleMemberAdded(payload).catch((e) => console.error('Lark member-add lỗi:', e));
+    });
+  } else if (eventType === 'application.bot.menu_v6') {
+    // Người dùng bấm nút menu tuỳ chỉnh của bot (VD nút Góp ý).
+    setImmediate(() => {
+      handleBotMenuEvent(payload).catch((e) => console.error('Lark bot-menu lỗi:', e));
     });
   }
 }

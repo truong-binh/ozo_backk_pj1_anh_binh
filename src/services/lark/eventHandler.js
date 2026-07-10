@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { getUserEmail, sendText, sendCard } = require('./larkClient');
+const { getUserEmail, sendText, sendCard, sendTextByOpenId } = require('./larkClient');
 const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
@@ -35,11 +35,26 @@ function isLoginRequest(text) {
   return /^(dang nhap|dangnhap|login|otp|lay ma|xin ma|ma dang nhap|ma web)\b/.test(t);
 }
 
-// Tin nhắn mang tính GÓP Ý / mong muốn sửa–cải thiện AI hoặc hệ thống web?
-// Dò theo từ khoá (đã bỏ dấu) để lưu lại làm dữ liệu cải thiện.
-function isSuggestion(text) {
-  const t = stripAccent(text).toLowerCase();
-  return /(cai thien|cai tien|gop y|de xuat|kien nghi|phan hoi|y kien|nen them|nen co|nen sua|nen bo sung|bo sung them|mong muon|sua loi|bi loi|loi he thong|khong hoat dong|khong dung|them tinh nang|tinh nang moi|toi nghi nen|bug|feedback)/.test(t);
+// --- Chế độ "đang chờ nhập góp ý" (sau khi bấm nút menu Góp ý) ---
+// Key = open_id người dùng, value = thời điểm bật. TTL 30 phút.
+const SUGGEST_KEY = 'suggestion';
+const awaitingSuggestion = new Map();
+const SUGGEST_TTL = 30 * 60 * 1000;
+function setAwaitingSuggestion(openId) {
+  const now = Date.now();
+  for (const [k, t] of awaitingSuggestion) {
+    if (now - t > SUGGEST_TTL) awaitingSuggestion.delete(k);
+  }
+  awaitingSuggestion.set(openId, now);
+}
+function isAwaitingSuggestion(openId) {
+  const at = awaitingSuggestion.get(openId);
+  if (!at) return false;
+  if (Date.now() - at > SUGGEST_TTL) {
+    awaitingSuggestion.delete(openId);
+    return false;
+  }
+  return true;
 }
 
 // Cấp mã đăng nhập web cho đúng người nhắn (theo open_id), DM lại trong chat 1-1.
@@ -116,6 +131,29 @@ async function handleMessageEvent(evt) {
     return;
   }
 
+  // Đang chờ người dùng nhập góp ý (vừa bấm nút menu Góp ý) -> lưu tin này làm
+  // góp ý, không đưa vào AI agent.
+  if (isAwaitingSuggestion(openId)) {
+    const t = stripAccent(text).toLowerCase().trim();
+    if (/^(huy|cancel|thoi|bo qua|khong)$/.test(t)) {
+      awaitingSuggestion.delete(openId);
+      await sendText(chatId, 'Đã bỏ qua góp ý. Bạn cứ hỏi mình bình thường nhé.');
+      return;
+    }
+    awaitingSuggestion.delete(openId);
+    let picName = null;
+    try {
+      const c = await resolvePicByOpenId(openId);
+      picName = c.picName;
+    } catch {
+      /* không sao, lưu không kèm tên */
+    }
+    await saveSuggestion({ chatId, openId, picName, message: text });
+    console.log('[LARK] đã lưu góp ý:', text.slice(0, 80));
+    await sendText(chatId, '✅ Đã ghi nhận góp ý của bạn. Cảm ơn bạn nhiều!');
+    return;
+  }
+
   // Xin mã đăng nhập web -> cấp OTP theo open_id, DM lại (không đưa vào AI agent).
   if (isLoginRequest(text)) {
     await handleLoginRequest(chatId, openId, message.chat_type);
@@ -131,12 +169,6 @@ async function handleMessageEvent(evt) {
       if (email) ctx = await resolvePicByEmail(email);
     }
     console.log('[LARK] open_id:', openId, '| authed:', ctx.authed, '| pic:', ctx.picName);
-
-    // Nếu là góp ý / mong muốn cải thiện AI–hệ thống -> lưu lại (vẫn trả lời tiếp).
-    if (isSuggestion(text)) {
-      await saveSuggestion({ chatId, openId, picName: ctx.picName, message: text });
-      console.log('[LARK] đã lưu góp ý:', text.slice(0, 80));
-    }
 
     const history = await loadHistory(chatId, llmProvider);
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);
@@ -219,4 +251,32 @@ function safeJson(s) {
   }
 }
 
-module.exports = { handleMessageEvent, handleCardAction };
+// Người dùng bấm nút menu tuỳ chỉnh của bot (application.bot.menu_v6).
+// Nếu là nút Góp ý -> bật chế độ chờ nhập & nhắn hướng dẫn (DM theo open_id).
+async function handleBotMenuEvent(evt) {
+  const eventId = evt.header?.event_id;
+  if (alreadyHandled(eventId)) return;
+
+  const ev = evt.event || {};
+  const key = ev.event_key || ev.key || '';
+  const openId =
+    ev.operator?.operator_id?.open_id ||
+    ev.operator?.open_id ||
+    evt.header?.operator?.open_id ||
+    null;
+  console.log('[LARK] bot menu click | key:', key, '| open_id:', openId);
+  if (!openId) return;
+
+  // Chỉ xử lý nút Góp ý (event_key = 'suggestion'). Nút khác: bỏ qua.
+  if (key && key !== SUGGEST_KEY) return;
+
+  setAwaitingSuggestion(openId);
+  await sendTextByOpenId(
+    openId,
+    '💡 Mời bạn nhập nội dung góp ý về trợ lý hoặc hệ thống web.\n' +
+      'Gõ trực tiếp vào khung chat rồi gửi — tin nhắn kế tiếp của bạn sẽ được ghi nhận.\n' +
+      '(Gõ "huỷ" nếu muốn bỏ qua.)',
+  );
+}
+
+module.exports = { handleMessageEvent, handleCardAction, handleBotMenuEvent };
