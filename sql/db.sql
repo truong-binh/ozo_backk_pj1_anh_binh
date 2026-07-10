@@ -97,6 +97,16 @@ CREATE TABLE public.chatbot_feedback (
   rated_at timestamp with time zone,
   CONSTRAINT chatbot_feedback_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.chatbot_suggestions (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  chat_id text NOT NULL,
+  open_id text,
+  pic_name text,
+  message text NOT NULL,        -- nguyên văn tin nhắn góp ý/cải thiện của người dùng
+  handled boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chatbot_suggestions_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.sent_reminders (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   project_id bigint NOT NULL,

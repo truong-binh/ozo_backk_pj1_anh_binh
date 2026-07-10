@@ -23,4 +23,22 @@ async function saveFeedback({ chatId, openId, picName, question, answer, provide
   }
 }
 
-module.exports = { saveFeedback };
+// Lưu 1 tin nhắn mang tính góp ý/cải thiện về AI hoặc hệ thống web.
+async function saveSuggestion({ chatId, openId, picName, message }) {
+  try {
+    const sb = getSupabaseClient();
+    const { error } = await sb.from('chatbot_suggestions').insert({
+      chat_id: chatId,
+      open_id: openId || null,
+      pic_name: picName || null,
+      message,
+    });
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    console.warn('[suggestion] save lỗi:', err.message);
+    return false;
+  }
+}
+
+module.exports = { saveFeedback, saveSuggestion };

@@ -3,7 +3,7 @@ const { getUserEmail, sendText, sendCard } = require('./larkClient');
 const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
-const { saveFeedback } = require('../chatbot/feedbackStore');
+const { saveFeedback, saveSuggestion } = require('../chatbot/feedbackStore');
 const { answerCard, ratedCard } = require('./larkCards');
 const { issueLoginCodeForOpenId } = require('../authService');
 
@@ -33,6 +33,13 @@ function stripAccent(s) {
 function isLoginRequest(text) {
   const t = stripAccent(text).toLowerCase().trim();
   return /^(dang nhap|dangnhap|login|otp|lay ma|xin ma|ma dang nhap|ma web)\b/.test(t);
+}
+
+// Tin nhắn mang tính GÓP Ý / mong muốn sửa–cải thiện AI hoặc hệ thống web?
+// Dò theo từ khoá (đã bỏ dấu) để lưu lại làm dữ liệu cải thiện.
+function isSuggestion(text) {
+  const t = stripAccent(text).toLowerCase();
+  return /(cai thien|cai tien|gop y|de xuat|kien nghi|phan hoi|y kien|nen them|nen co|nen sua|nen bo sung|bo sung them|mong muon|sua loi|bi loi|loi he thong|khong hoat dong|khong dung|them tinh nang|tinh nang moi|toi nghi nen|bug|feedback)/.test(t);
 }
 
 // Cấp mã đăng nhập web cho đúng người nhắn (theo open_id), DM lại trong chat 1-1.
@@ -124,6 +131,12 @@ async function handleMessageEvent(evt) {
       if (email) ctx = await resolvePicByEmail(email);
     }
     console.log('[LARK] open_id:', openId, '| authed:', ctx.authed, '| pic:', ctx.picName);
+
+    // Nếu là góp ý / mong muốn cải thiện AI–hệ thống -> lưu lại (vẫn trả lời tiếp).
+    if (isSuggestion(text)) {
+      await saveSuggestion({ chatId, openId, picName: ctx.picName, message: text });
+      console.log('[LARK] đã lưu góp ý:', text.slice(0, 80));
+    }
 
     const history = await loadHistory(chatId, llmProvider);
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);
