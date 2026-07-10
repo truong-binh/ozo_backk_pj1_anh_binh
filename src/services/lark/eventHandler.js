@@ -1,10 +1,24 @@
+const crypto = require('node:crypto');
 const { getUserEmail, sendText, sendCard } = require('./larkClient');
 const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
-const { createFeedback, setFeedbackRating } = require('../chatbot/feedbackStore');
+const { saveFeedback } = require('../chatbot/feedbackStore');
 const { answerCard, ratedCard } = require('./larkCards');
 const { issueLoginCodeForOpenId } = require('../authService');
+
+// Giữ tạm câu hỏi + câu trả lời của mỗi thẻ theo token, CHỈ ghi DB khi người
+// dùng bấm nút đánh giá. TTL 24h, dọn rác mỗi lần thêm. Lưu ý: bộ nhớ tiến
+// trình — nếu server restart trước khi người dùng bấm thì token đó mất.
+const pendingFeedback = new Map();
+const PENDING_TTL = 24 * 60 * 60 * 1000;
+function putPending(token, data) {
+  const now = Date.now();
+  for (const [k, v] of pendingFeedback) {
+    if (now - v.at > PENDING_TTL) pendingFeedback.delete(k);
+  }
+  pendingFeedback.set(token, { ...data, at: now });
+}
 
 // Bỏ dấu tiếng Việt để nhận diện lệnh (đ->d).
 function stripAccent(s) {
@@ -41,7 +55,7 @@ async function handleLoginRequest(chatId, openId, chatType) {
       chatId,
       `🔐 Mã đăng nhập Feelex QLDA của bạn: ${res.code}\n` +
         `Hiệu lực ${res.ttlMinutes} phút. Nhập mã này trên web để đăng nhập với tên "${res.picName}".\n` +
-        '⚠️ Không chia sẻ mã này cho bất kỳ ai.',
+        '⚠️ Không chia sẻ mã này cho bất kỳ ai. Truy cập: https://ozo-truong-binhs-projects.vercel.app',
     );
   } catch (err) {
     console.error('[login-otp] lỗi:', err.message);
@@ -115,9 +129,10 @@ async function handleMessageEvent(evt) {
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);
     await saveHistory(chatId, llmProvider, newHistory);
 
-    // Lưu lượt hỏi–đáp (rating trống) rồi gửi thẻ kèm 2 nút đánh giá. Nếu chưa
-    // tạo được bản ghi (VD bảng chưa có) thì gửi text thường để chat vẫn chạy.
-    const fbId = await createFeedback({
+    // Gửi thẻ kèm 2 nút đánh giá. CHƯA ghi DB — chỉ giữ tạm Q&A theo token,
+    // khi người dùng bấm nút mới ghi vào chatbot_feedback.
+    const token = crypto.randomUUID();
+    putPending(token, {
       chatId,
       openId,
       picName: ctx.picName,
@@ -125,12 +140,7 @@ async function handleMessageEvent(evt) {
       answer: reply,
       provider: llmProvider,
     });
-    let sendRes;
-    if (fbId) {
-      sendRes = await sendCard(chatId, answerCard(reply, fbId));
-    } else {
-      sendRes = await sendText(chatId, reply);
-    }
+    const sendRes = await sendCard(chatId, answerCard(reply, token));
     console.log('[LARK] đã gửi trả lời, Lark code:', sendRes?.code);
   } catch (err) {
     console.error('handleMessageEvent lỗi:', err);
@@ -154,18 +164,37 @@ async function handleCardAction(payload) {
     return { toast: { type: 'info', content: 'Không xác định được thao tác.' } };
   }
 
+  const token = value.id;
+  const pending = pendingFeedback.get(token);
+  if (!pending) {
+    // Token hết hạn hoặc server đã restart -> không còn Q&A để lưu.
+    return {
+      toast: { type: 'warning', content: 'Phiên đánh giá đã hết hạn, bạn hỏi lại nhé.' },
+    };
+  }
+
   const rating = value.r === 'improve' ? 'improve' : 'good';
-  const { ok, answer } = await setFeedbackRating(value.id, rating, openId);
+  const ok = await saveFeedback({
+    chatId: pending.chatId,
+    openId: openId || pending.openId,
+    picName: pending.picName,
+    question: pending.question,
+    answer: pending.answer,
+    provider: pending.provider,
+    rating,
+  });
   if (!ok) {
     return { toast: { type: 'error', content: 'Chưa lưu được đánh giá, thử lại sau nhé.' } };
   }
-  console.log('[LARK] feedback', value.id, '=>', rating, '| open_id', openId);
+  // Ghi xong -> bỏ token để không lưu trùng khi bấm lại.
+  pendingFeedback.delete(token);
+  console.log('[LARK] feedback saved', rating, '| open_id', openId);
 
   const toastContent =
     rating === 'good' ? 'Cảm ơn đánh giá của bạn!' : 'Đã ghi nhận để cải thiện. Cảm ơn bạn!';
   return {
     toast: { type: 'success', content: toastContent },
-    card: { type: 'raw', data: ratedCard(answer, rating) },
+    card: { type: 'raw', data: ratedCard(pending.answer, rating) },
   };
 }
 
