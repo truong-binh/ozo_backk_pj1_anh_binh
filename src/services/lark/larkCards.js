@@ -7,30 +7,25 @@ function answerCard(replyText, id) {
     config: { wide_screen_mode: true, update_multi: true },
     elements: [
       { tag: 'div', text: { tag: 'lark_md', content: replyText } },
-      { tag: 'hr' },
       {
         tag: 'action',
+        layout: 'flow',
         actions: [
           {
             tag: 'button',
             text: { tag: 'plain_text', content: '👍 Tốt' },
-            type: 'primary',
+            type: 'default',
+            size: 'tiny',
+            width: 'default',
             value: { action: 'fb', id, r: 'good' },
           },
           {
             tag: 'button',
             text: { tag: 'plain_text', content: '👎 Cần cải thiện' },
-            type: 'danger',
+            type: 'default',
+            size: 'tiny',
+            width: 'default',
             value: { action: 'fb', id, r: 'improve' },
-          },
-        ],
-      },
-      {
-        tag: 'note',
-        elements: [
-          {
-            tag: 'plain_text',
-            content: 'Đánh giá giúp trợ lý học và cải thiện câu trả lời.',
           },
         ],
       },
