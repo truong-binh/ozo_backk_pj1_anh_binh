@@ -1,6 +1,6 @@
 const { larkVerifyToken } = require('../config/env');
 const { parseEventBody } = require('../services/lark/larkCrypto');
-const { handleMessageEvent } = require('../services/lark/eventHandler');
+const { handleMessageEvent, handleCardAction } = require('../services/lark/eventHandler');
 const { handleMemberAdded } = require('../services/lark/memberSync');
 
 // Webhook nhận event từ Lark. Phải trả 200 nhanh (<3s) rồi xử lý nền.
@@ -28,10 +28,23 @@ async function larkWebhook(req, res) {
     return res.status(401).json({ error: 'invalid token' });
   }
 
+  const eventType = payload.header?.event_type;
+
+  // 2b) Người dùng bấm nút đánh giá trên thẻ -> phải trả TOAST/thẻ đồng bộ.
+  //     Bắt cả event 2.0 (card.action.trigger) lẫn callback thẻ đời cũ (có .action).
+  if (eventType === 'card.action.trigger' || payload.action) {
+    try {
+      const result = await handleCardAction(payload);
+      return res.json(result || { code: 0 });
+    } catch (err) {
+      console.error('Lark card action lỗi:', err);
+      return res.json({ toast: { type: 'error', content: 'Có lỗi, thử lại sau nhé.' } });
+    }
+  }
+
   // 3) Trả 200 ngay, xử lý message ở nền.
   res.json({ code: 0 });
 
-  const eventType = payload.header?.event_type;
   console.log('[LARK] event_type:', eventType || payload.type);
   if (eventType === 'im.message.receive_v1') {
     setImmediate(() => {

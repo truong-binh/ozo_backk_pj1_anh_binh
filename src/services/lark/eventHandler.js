@@ -1,7 +1,9 @@
-const { getUserEmail, sendText } = require('./larkClient');
+const { getUserEmail, sendText, sendCard } = require('./larkClient');
 const { resolvePicByEmail, resolvePicByOpenId } = require('../chatbot/chatAuth');
 const { runAgent, provider: llmProvider } = require('../chatbot/agent');
 const { loadHistory, saveHistory } = require('../chatbot/historyStore');
+const { createFeedback, setFeedbackRating } = require('../chatbot/feedbackStore');
+const { answerCard, ratedCard } = require('./larkCards');
 const { issueLoginCodeForOpenId } = require('../authService');
 
 // Bỏ dấu tiếng Việt để nhận diện lệnh (đ->d).
@@ -112,7 +114,23 @@ async function handleMessageEvent(evt) {
     const history = await loadHistory(chatId, llmProvider);
     const { text: reply, history: newHistory } = await runAgent(text, history, ctx);
     await saveHistory(chatId, llmProvider, newHistory);
-    const sendRes = await sendText(chatId, reply);
+
+    // Lưu lượt hỏi–đáp (rating trống) rồi gửi thẻ kèm 2 nút đánh giá. Nếu chưa
+    // tạo được bản ghi (VD bảng chưa có) thì gửi text thường để chat vẫn chạy.
+    const fbId = await createFeedback({
+      chatId,
+      openId,
+      picName: ctx.picName,
+      question: text,
+      answer: reply,
+      provider: llmProvider,
+    });
+    let sendRes;
+    if (fbId) {
+      sendRes = await sendCard(chatId, answerCard(reply, fbId));
+    } else {
+      sendRes = await sendText(chatId, reply);
+    }
     console.log('[LARK] đã gửi trả lời, Lark code:', sendRes?.code);
   } catch (err) {
     console.error('handleMessageEvent lỗi:', err);
@@ -120,4 +138,43 @@ async function handleMessageEvent(evt) {
   }
 }
 
-module.exports = { handleMessageEvent };
+// Xử lý người dùng bấm nút đánh giá trên thẻ trả lời.
+// Nhận cả 2 định dạng: event 2.0 `card.action.trigger` và callback thẻ đời cũ.
+// Trả về object phản hồi cho Lark (toast + thẻ đã cập nhật) để nơi gọi res.json().
+async function handleCardAction(payload) {
+  // Định dạng mới (schema 2.0): value & operator nằm trong payload.event.
+  // Định dạng cũ: nằm thẳng ở payload.action / payload.open_id.
+  const action = payload.event?.action || payload.action || {};
+  const rawValue = action.value || {};
+  const value = typeof rawValue === 'string' ? safeJson(rawValue) : rawValue;
+  const openId =
+    payload.event?.operator?.open_id || payload.open_id || null;
+
+  if (!value || value.action !== 'fb' || !value.id) {
+    return { toast: { type: 'info', content: 'Không xác định được thao tác.' } };
+  }
+
+  const rating = value.r === 'improve' ? 'improve' : 'good';
+  const { ok, answer } = await setFeedbackRating(value.id, rating, openId);
+  if (!ok) {
+    return { toast: { type: 'error', content: 'Chưa lưu được đánh giá, thử lại sau nhé.' } };
+  }
+  console.log('[LARK] feedback', value.id, '=>', rating, '| open_id', openId);
+
+  const toastContent =
+    rating === 'good' ? 'Cảm ơn đánh giá của bạn!' : 'Đã ghi nhận để cải thiện. Cảm ơn bạn!';
+  return {
+    toast: { type: 'success', content: toastContent },
+    card: { type: 'raw', data: ratedCard(answer, rating) },
+  };
+}
+
+function safeJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { handleMessageEvent, handleCardAction };

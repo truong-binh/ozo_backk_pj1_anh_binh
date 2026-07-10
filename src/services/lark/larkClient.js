@@ -55,6 +55,31 @@ async function sendText(chatId, text) {
   return data;
 }
 
+// Gửi 1 thẻ tương tác (interactive card) vào 1 chat.
+async function sendCard(chatId, card) {
+  const token = await getTenantAccessToken();
+  const res = await fetch(
+    `${larkDomain}/open-apis/im/v1/messages?receive_id_type=chat_id`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+      }),
+    },
+  );
+  const data = await res.json();
+  if (data.code !== 0) {
+    console.error('Lark sendCard lỗi:', data.code, data.msg);
+  }
+  return data;
+}
+
 // Chi tiết 1 user theo open_id (name, email, department_ids...). Cần scope contact:user.base:readonly.
 async function getUserDetail(openId) {
   if (!openId) return null;
@@ -205,6 +230,7 @@ module.exports = {
   isLarkConfigured,
   getTenantAccessToken,
   sendText,
+  sendCard,
   sendTextByEmail,
   sendTextByOpenId,
   listChats,
