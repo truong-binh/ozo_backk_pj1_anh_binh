@@ -94,7 +94,7 @@ async function computeReport() {
 }
 
 function line(r) {
-  return `• [${r.project.code}] ${r.node.node_id} ${r.node.node_name || ''} — PIC: ${r.pic} (hạn ${r.dueLabel})`;
+  return `• [${r.project.code}] ${r.project.name || ''} — ${r.node.node_id} ${r.node.node_name || ''} — PIC: ${r.pic} (hạn ${r.dueLabel})`;
 }
 
 function formatReport(rep) {
@@ -105,7 +105,7 @@ function formatReport(rep) {
 
   L.push(`⚠️ Quá hạn: ${rep.overdue.length} bước`);
   rep.overdue.forEach((r) =>
-    L.push(`• [${r.project.code}] ${r.node.node_id} ${r.node.node_name || ''} — PIC: ${r.pic} (quá ${r.lateDays} ngày, hạn ${r.dueLabel})`),
+    L.push(`• [${r.project.code}] ${r.project.name || ''} — ${r.node.node_id} ${r.node.node_name || ''} — PIC: ${r.pic} (quá ${r.lateDays} ngày, hạn ${r.dueLabel})`),
   );
   L.push('');
 

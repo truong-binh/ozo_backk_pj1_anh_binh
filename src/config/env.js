@@ -40,7 +40,7 @@ module.exports = {
   cloudinaryApiKey: (process.env.CLOUDINARY_API_KEY || '').trim(),
   cloudinaryApiSecret: (process.env.CLOUDINARY_API_SECRET || '').trim(),
 
-  // Chatbot LLM: chọn nhà cung cấp (groq | gemini)
+  // Chatbot LLM: chọn nhà cung cấp (groq | gemini | anthropic)
   llmProvider: (process.env.LLM_PROVIDER || 'groq').trim().toLowerCase(),
 
   // Gemini (bộ não chatbot)
@@ -50,6 +50,10 @@ module.exports = {
   // Groq (free, Llama 3.3 70B, OpenAI-compatible)
   groqApiKey: (process.env.GROQ_API_KEY || '').trim(),
   groqModel: (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim(),
+
+  // Anthropic Claude (Messages API) — thông minh hơn, có phí theo token.
+  anthropicApiKey: (process.env.ANTHROPIC_API_KEY || '').trim(),
+  anthropicModel: (process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6').trim(),
 
   // Lark bot (chatbot QLDA qua Lark chat)
   larkAppId: (process.env.LARK_APP_ID || '').trim(),
