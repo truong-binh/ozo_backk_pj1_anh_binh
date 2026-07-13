@@ -312,6 +312,219 @@ const tools = {
     },
   },
 
+  upcoming_deadlines: {
+    declaration: {
+      name: 'upcoming_deadlines',
+      description:
+        'Liệt kê các bước SẮP TỚI HẠN trong N ngày tới (mặc định 7), chưa "Đã xong"/"Bỏ qua". Lọc thêm theo phòng (dept) hoặc PIC. Dùng cho "tuần/tháng này có bước nào tới hạn", "deadline sắp tới của phòng X", "việc đến hạn hôm nay" (days=0). Bước ĐÃ quá hạn thì dùng find_late_nodes.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          days: { type: 'NUMBER', description: 'số ngày tới tính từ hôm nay (mặc định 7; tuần≈7, tháng≈30, hôm nay=0)' },
+          dept: { type: 'STRING', description: 'lọc theo phòng, vd RD/TK/PP (tùy chọn)' },
+          pic: { type: 'STRING', description: 'lọc theo PIC (tùy chọn)' },
+        },
+      },
+    },
+    async execute({ days, dept, pic } = {}) {
+      const n = Number(days);
+      const window = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 7;
+      const all = await listProjectsWithNodes();
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dq = norm(dept);
+      const pq = norm(pic);
+      const out = [];
+      for (const detail of all) {
+        const dates = computeAllDates(detail);
+        for (const node of detail.nodes) {
+          if (node.status === 'Đã xong' || node.status === 'Bỏ qua') continue;
+          if (dq && norm(node.dept) !== dq) continue;
+          if (pq && !norm(node.pic).includes(pq)) continue;
+          const due = dates[node.node_id]?.due;
+          if (!due) continue;
+          const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+          const diff = Math.round((dueDay.getTime() - today.getTime()) / 86400000);
+          if (diff < 0 || diff > window) continue;
+          out.push({
+            project_code: detail.project.code,
+            project_name: detail.project.name,
+            days_left: diff,
+            ...summarizeNode(detail, node, dates),
+          });
+        }
+      }
+      out.sort((a, b) => a.days_left - b.days_left);
+      return { window_days: window, count: out.length, nodes: out };
+    },
+  },
+
+  nodes_by_dept: {
+    declaration: {
+      name: 'nodes_by_dept',
+      description:
+        'Liệt kê các bước của 1 PHÒNG BAN trên MỌI dự án (khối lượng việc của phòng), kèm đếm theo trạng thái. Lọc thêm theo trạng thái (status). Dùng cho "phòng RD đang làm gì", "phòng TK còn bao nhiêu việc", "việc của phòng PP".',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          dept: { type: 'STRING', description: 'mã phòng, vd RD, TK, PP, PC, Sale' },
+          status: {
+            type: 'STRING',
+            description: `lọc trạng thái (tùy chọn): ${STATUS_OPTIONS.join(' | ')}`,
+          },
+        },
+        required: ['dept'],
+      },
+    },
+    async execute({ dept, status } = {}) {
+      const dq = norm(dept);
+      if (!dq) return { error: 'Thiếu tên phòng.' };
+      const sf = status ? norm(status) : '';
+      const all = await listProjectsWithNodes();
+      const out = [];
+      const by_status = {};
+      for (const detail of all) {
+        const dates = computeAllDates(detail);
+        for (const node of detail.nodes) {
+          if (norm(node.dept) !== dq) continue;
+          if (sf && norm(node.status) !== sf) continue;
+          by_status[node.status] = (by_status[node.status] || 0) + 1;
+          out.push({
+            project_code: detail.project.code,
+            project_name: detail.project.name,
+            ...summarizeNode(detail, node, dates),
+          });
+        }
+      }
+      return { dept, count: out.length, by_status, nodes: out };
+    },
+  },
+
+  project_stats: {
+    declaration: {
+      name: 'project_stats',
+      description:
+        'Thống kê tiến độ. Có query = 1 dự án (số bước xong/tổng, %, số trễ, bước hiện tại). Bỏ trống = TỔNG QUAN mọi dự án (sắp xếp chậm nhất lên đầu) + tổng số bước trễ theo phòng. Dùng cho "tiến độ dự án X bao nhiêu %", "dự án nào chậm nhất", "toàn công ty bao nhiêu bước trễ / theo phòng".',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: 'id/code/tên dự án (tùy chọn; bỏ trống = tổng quan)' },
+        },
+      },
+    },
+    async execute({ query } = {}) {
+      const statOf = (detail) => {
+        const dates = computeAllDates(detail);
+        let done = 0;
+        let total = 0;
+        let late = 0;
+        for (const node of detail.nodes) {
+          if (node.status === 'Bỏ qua') continue;
+          total += 1;
+          if (node.status === 'Đã xong') done += 1;
+          if (lateDays(detail, node.node_id, dates) > 0) late += 1;
+        }
+        const current =
+          detail.nodes.find((n) => n.status === 'Đang làm') ||
+          detail.nodes.find((n) => n.status === 'Chưa làm') ||
+          detail.nodes.find((n) => n.status === 'Tạm dừng') ||
+          null;
+        return {
+          done,
+          total,
+          late,
+          percent: total ? Math.round((done / total) * 100) : 0,
+          current_step: current ? `${current.node_id} ${current.node_name || ''}`.trim() : 'Hoàn tất',
+        };
+      };
+
+      if (query && norm(query)) {
+        const { match, candidates } = await resolveProject(query);
+        if (!match) return candidateError(candidates);
+        const detail = await getProjectDetail(match.id);
+        return { project: { code: match.code, name: match.name }, ...statOf(detail) };
+      }
+
+      const all = await listProjectsWithNodes();
+      const projects = [];
+      const late_by_dept = {};
+      let totDone = 0;
+      let totTotal = 0;
+      let totLate = 0;
+      for (const detail of all) {
+        const s = statOf(detail);
+        projects.push({
+          project_code: detail.project.code,
+          project_name: detail.project.name,
+          ...s,
+        });
+        totDone += s.done;
+        totTotal += s.total;
+        totLate += s.late;
+        const dates = computeAllDates(detail);
+        for (const node of detail.nodes) {
+          if (lateDays(detail, node.node_id, dates) > 0) {
+            const d = (node.dept || '').trim() || '(chưa gán)';
+            late_by_dept[d] = (late_by_dept[d] || 0) + 1;
+          }
+        }
+      }
+      projects.sort((a, b) => a.percent - b.percent); // chậm nhất lên đầu
+      return {
+        total_projects: projects.length,
+        total_steps: totTotal,
+        total_done: totDone,
+        total_percent: totTotal ? Math.round((totDone / totTotal) * 100) : 0,
+        total_late: totLate,
+        late_by_dept,
+        projects,
+      };
+    },
+  },
+
+  list_members: {
+    declaration: {
+      name: 'list_members',
+      description:
+        'Danh bạ PIC / trưởng phòng. Bỏ trống = tất cả; truyền dept để lọc 1 phòng; leaders_only=true để chỉ lấy trưởng phòng. Dùng cho "ai là trưởng phòng RD", "phòng TK có những ai", "liên hệ/email của X".',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          dept: { type: 'STRING', description: 'lọc theo phòng (tùy chọn)' },
+          leaders_only: { type: 'BOOLEAN', description: 'true = chỉ trưởng phòng (tùy chọn)' },
+        },
+      },
+    },
+    async execute({ dept, leaders_only } = {}) {
+      const dq = norm(dept);
+      const all = await listAllMembers();
+      const members = [];
+      for (const m of all) {
+        const leadDepts =
+          Array.isArray(m.lead_depts) && m.lead_depts.length
+            ? m.lead_depts
+            : m.is_leader && m.dept
+              ? [m.dept]
+              : [];
+        const isLeader = leadDepts.length > 0;
+        if (leaders_only && !isLeader) continue;
+        if (dq) {
+          const inDept = norm(m.dept) === dq || leadDepts.some((d) => norm(d) === dq);
+          if (!inDept) continue;
+        }
+        members.push({
+          pic_name: m.pic_name,
+          dept: m.dept || '',
+          is_leader: isLeader,
+          lead_depts: leadDepts,
+          email: m.email || null,
+          has_lark: !!m.open_id,
+        });
+      }
+      return { count: members.length, members };
+    },
+  },
+
   explain_workflow: {
     declaration: {
       name: 'explain_workflow',
@@ -499,6 +712,68 @@ const tools = {
           duration: updated.duration,
           notes: updated.notes,
         },
+      };
+    },
+  },
+
+  add_note: {
+    declaration: {
+      name: 'add_note',
+      description:
+        'THÊM (nối) 1 ghi chú vào 1 bước — KHÔNG xoá ghi chú cũ. Dùng khi người dùng nói "ghi chú bước ... là ...", "thêm ghi chú", "ghi chú: ...". Quyền: PIC phụ trách bước đó, hoặc TRƯỞNG PHÒNG của phòng phụ trách bước. Bot tự kèm ngày + tên người ghi. Nếu người dùng muốn GHI ĐÈ toàn bộ ghi chú thì dùng update_node.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: 'id/code/tên dự án' },
+          node_code: { type: 'STRING', description: 'mã bước, ví dụ B5' },
+          note: { type: 'STRING', description: 'nội dung ghi chú cần thêm' },
+        },
+        required: ['query', 'node_code', 'note'],
+      },
+    },
+    async execute(args, ctx) {
+      if (!ctx.authed) {
+        return {
+          error:
+            'Bạn chưa được xác thực là PIC. Email Lark của bạn cần nằm trong bảng pic_members mới được ghi chú.',
+        };
+      }
+      const note = String(args.note || '').trim();
+      if (!note) return { error: 'Nội dung ghi chú đang trống.' };
+
+      const { match, candidates } = await resolveProject(args.query);
+      if (!match) return candidateError(candidates);
+      const nodeCode = String(args.node_code || '').trim().toUpperCase();
+      const node = await getProjectNode(match.id, nodeCode);
+      if (!node) return { error: `Dự án ${match.code} không có bước ${nodeCode}.` };
+
+      // Phân quyền GIỐNG update_node: chủ bước (pic = tên mình) hoặc trưởng phòng của bước.
+      const owner = (node.pic || '').trim();
+      const nodeDept = (node.dept || '').trim();
+      const isLeaderOfDept =
+        Array.isArray(ctx.leadDepts) && nodeDept && ctx.leadDepts.includes(nodeDept);
+      const isOwner = owner && owner === (ctx.picName || '').trim();
+      if (!isLeaderOfDept && !isOwner) {
+        return {
+          error: `Bước ${nodeCode} do "${owner || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ ghi chú được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
+        };
+      }
+
+      // Nối thêm dòng ghi chú kèm ngày + người ghi (không xoá cũ).
+      const now = new Date();
+      const stamp = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const who = ctx.picName || 'PIC';
+      const line = `[${stamp} - ${who}] ${note}`;
+      const prev = (node.notes || '').trim();
+      const merged = prev ? `${prev}\n${line}` : line;
+
+      const updated = await updateProjectNode(match.id, nodeCode, { notes: merged });
+      return {
+        ok: true,
+        project: match.code,
+        node: nodeCode,
+        note_added: line,
+        notes: updated.notes,
       };
     },
   },
