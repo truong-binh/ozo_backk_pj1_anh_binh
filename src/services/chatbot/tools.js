@@ -14,6 +14,7 @@ const {
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
 const { findMemberByName } = require('../picMembersService');
+const { notifyStepsStarted } = require('../reminders/reminderService');
 
 const STATUS_OPTIONS = ['Chưa làm', 'Đang làm', 'Đã xong', 'Tạm dừng', 'Bỏ qua'];
 
@@ -388,7 +389,13 @@ const tools = {
       const updated = await updateProjectNode(match.id, nodeCode, payload);
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp sang 'Đang làm'.
       if (updated.status === 'Đã xong' || updated.status === 'Bỏ qua') {
-        await startReadySuccessors(match.id, nodeCode);
+        const started = await startReadySuccessors(match.id, nodeCode);
+        // Báo cho PIC + trưởng phòng của từng bước vừa mở khoá (Lark DM, chạy nền).
+        if (started && started.length) {
+          notifyStepsStarted(match.id, started).catch((e) =>
+            console.error('[start-notify] lỗi:', e.message),
+          );
+        }
       }
       return {
         ok: true,

@@ -423,4 +423,98 @@ async function notifyNewProjectAssignments(projectId) {
   return { ok: true, people: byPerson.size, sent: sentItems.length };
 }
 
-module.exports = { runReminders, notifyAssignment, notifyNewProjectAssignments };
+// Nội dung tin "việc kế tiếp sẵn sàng" (bước trước vừa xong -> bước sau mở khoá).
+function composeStartedMessage(list) {
+  const line = (it) =>
+    `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
+  const out = ['✅ Bước trước đã xong – việc kế tiếp sẵn sàng để làm:', ''];
+  list.forEach((it) => out.push(line(it)));
+  out.push('');
+  out.push('Nhắn cập nhật cho tôi lúc xong hoặc cập nhật tiến độ trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!');
+  return out.join('\n');
+}
+
+// Gửi NGAY thông báo khi bước trước hoàn thành -> các bước kế tiếp chuyển sang
+// 'Đang làm'. Mỗi bước báo cho: (1) PIC của bước, (2) TRƯỞNG PHÒNG của bước.
+// startedNodeIds = danh sách node vừa được startReadySuccessors() mở khoá.
+// Dedupe qua sent_reminders (kind 'started', dedup_key = liên hệ người nhận) để
+// không gửi lại. Gom theo người -> 1 tin/người. Không ném lỗi ra ngoài (chạy nền).
+async function notifyStepsStarted(projectId, startedNodeIds) {
+  if (!remindersEnabled || !isLarkConfigured) return { ok: false, reason: 'disabled' };
+  const ids = (startedNodeIds || []).filter(Boolean);
+  if (!ids.length) return { ok: false, reason: 'no_nodes' };
+
+  const { project, nodes } = await getProjectDetail(projectId);
+  const contactMap = await loadPicContactMap();
+  const leaderMap = await loadLeaderContactMap(contactMap);
+  const dates = computeAllDates({ project, nodes });
+
+  const items = [];
+  for (const nid of ids) {
+    const node = (nodes || []).find((n) => n.node_id === nid);
+    if (!node) continue;
+    if (DONE.has(node.status)) continue; // an toàn: chỉ bước đang mở
+    const due = dates[node.node_id]?.due;
+    const dueLabel = due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—';
+
+    // Người nhận cho bước này: PIC + trưởng phòng, dedupe theo liên hệ (nếu PIC
+    // chính là trưởng phòng thì chỉ 1 người).
+    const recipByKey = new Map();
+    const addRecip = (contact) => {
+      if (!contact || !(contact.open_id || contact.email)) return;
+      recipByKey.set(contact.open_id || contact.email, contact);
+    };
+    if (node.pic && String(node.pic).trim()) {
+      addRecip(resolveAssignContact(node.pic, contactMap, leaderMap));
+    }
+    const dept = (node.dept || '').trim();
+    if (dept) addRecip(leaderMap.get(dept));
+
+    for (const [key, contact] of recipByKey) {
+      items.push({
+        project, node, pic: node.pic || '',
+        dueLabel, kind: 'started', dedup_key: norm(key),
+        contact, email: contact.email || null,
+      });
+    }
+  }
+  if (!items.length) return { ok: true, sent: 0, note: 'no_contact' };
+
+  // Bỏ các (bước, người) đã báo trước đó (nếu bảng tồn tại).
+  let remaining = items;
+  try {
+    const filtered = await filterUnsent(items);
+    remaining = filtered.remaining;
+  } catch (err) {
+    if (err.code !== 'NO_TABLE') throw err;
+  }
+  if (!remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
+
+  // Gom theo người nhận -> 1 tin/người.
+  const byPerson = new Map();
+  for (const it of remaining) {
+    const key = it.contact.open_id || it.contact.email;
+    if (!byPerson.has(key)) byPerson.set(key, { contact: it.contact, list: [] });
+    byPerson.get(key).list.push(it);
+  }
+
+  const sentItems = [];
+  for (const [, { contact, list }] of byPerson) {
+    const res = await sendToContact(contact, composeStartedMessage(list));
+    if (res && res.code === 0) sentItems.push(...list);
+  }
+  try {
+    await recordSent(sentItems);
+  } catch (_e) {
+    // bảng chưa có -> đã gửi là chính, bỏ qua ghi dedupe.
+  }
+
+  return { ok: true, people: byPerson.size, sent: sentItems.length };
+}
+
+module.exports = {
+  runReminders,
+  notifyAssignment,
+  notifyNewProjectAssignments,
+  notifyStepsStarted,
+};

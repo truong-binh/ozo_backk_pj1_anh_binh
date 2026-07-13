@@ -15,6 +15,7 @@ const { findMemberByName } = require("../services/picMembersService");
 const {
       notifyAssignment,
       notifyNewProjectAssignments,
+      notifyStepsStarted,
 } = require("../services/reminders/reminderService");
 
 async function getProjects(req, res) {
@@ -157,7 +158,13 @@ async function patchProjectNode(req, res) {
 
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
       if (data.status === "Đã xong" || data.status === "Bỏ qua") {
-            await startReadySuccessors(projectId, nodeId);
+            const started = await startReadySuccessors(projectId, nodeId);
+            // Báo cho PIC + trưởng phòng của từng bước vừa mở khoá (Lark DM, chạy nền).
+            if (started && started.length) {
+                  notifyStepsStarted(projectId, started).catch((e) =>
+                        console.error("[start-notify] lỗi:", e.message),
+                  );
+            }
       }
 
       // Vừa phân/đổi PIC -> gửi ngay thông báo "việc mới được giao" cho PIC (Lark DM).

@@ -83,30 +83,6 @@ CREATE TABLE public.chat_history (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT chat_history_pkey PRIMARY KEY (chat_id)
 );
-CREATE TABLE public.chatbot_feedback (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  chat_id text NOT NULL,
-  open_id text,
-  pic_name text,
-  question text NOT NULL,
-  answer text NOT NULL,
-  rating text,                 -- 'good' | 'improve' | NULL (chưa đánh giá)
-  correction text,             -- (tùy chọn) câu trả lời đúng do người dùng bổ sung
-  provider text,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  rated_at timestamp with time zone,
-  CONSTRAINT chatbot_feedback_pkey PRIMARY KEY (id)
-);
-CREATE TABLE public.chatbot_suggestions (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  chat_id text NOT NULL,
-  open_id text,
-  pic_name text,
-  message text NOT NULL,        -- nguyên văn tin nhắn góp ý/cải thiện của người dùng
-  handled boolean NOT NULL DEFAULT false,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT chatbot_suggestions_pkey PRIMARY KEY (id)
-);
 CREATE TABLE public.sent_reminders (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   project_id bigint NOT NULL,
@@ -117,4 +93,28 @@ CREATE TABLE public.sent_reminders (
   email text,
   sent_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT sent_reminders_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.chatbot_feedback (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  chat_id text NOT NULL,
+  open_id text,
+  pic_name text,
+  question text NOT NULL,
+  answer text NOT NULL,
+  rating text,
+  correction text,
+  provider text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  rated_at timestamp with time zone,
+  CONSTRAINT chatbot_feedback_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.chatbot_suggestions (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  chat_id text NOT NULL,
+  open_id text,
+  pic_name text,
+  message text NOT NULL,
+  handled boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chatbot_suggestions_pkey PRIMARY KEY (id)
 );
