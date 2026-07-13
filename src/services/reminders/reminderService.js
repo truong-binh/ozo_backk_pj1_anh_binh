@@ -457,8 +457,8 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
     const due = dates[node.node_id]?.due;
     const dueLabel = due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—';
 
-    // Người nhận cho bước này: PIC + trưởng phòng, dedupe theo liên hệ (nếu PIC
-    // chính là trưởng phòng thì chỉ 1 người).
+    // Người nhận cho bước kế tiếp: CHỈ PIC của bước (không báo trưởng phòng bước
+    // sau — trưởng phòng chỉ được báo cho bước VỪA XONG, xem notifyStepCompleted).
     const recipByKey = new Map();
     const addRecip = (contact) => {
       if (!contact || !(contact.open_id || contact.email)) return;
@@ -467,8 +467,6 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
     if (node.pic && String(node.pic).trim()) {
       addRecip(resolveAssignContact(node.pic, contactMap, leaderMap));
     }
-    const dept = (node.dept || '').trim();
-    if (dept) addRecip(leaderMap.get(dept));
 
     for (const [key, contact] of recipByKey) {
       items.push({
@@ -512,9 +510,71 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
   return { ok: true, people: byPerson.size, sent: sentItems.length };
 }
 
+function composeCompletedMessage(project, node, statusLabel, pic) {
+  const verb = statusLabel === 'Bỏ qua' ? 'đã được BỎ QUA' : 'đã HOÀN TẤT';
+  const who = pic && String(pic).trim() ? ` (PIC: ${String(pic).trim()})` : '';
+  return [
+    `✅ Bước ${verb}:`,
+    '',
+    `• [${project.code}] ${project.name || ''} – ${node.node_id} ${node.node_name || ''}${who}`,
+    '',
+    'Xem chi tiết trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!',
+  ].join('\n');
+}
+
+// Gửi NGAY cho TRƯỞNG PHÒNG của chính bước vừa 'Đã xong'/'Bỏ qua' để họ nắm bước
+// của phòng mình đã kết thúc. Chỉ gửi trưởng phòng (không gửi PIC bước này).
+// Nếu PIC bước này chính là trưởng phòng thì vẫn nhận (họ là trưởng phòng).
+// Dedupe qua sent_reminders (kind 'completed', dedup_key = liên hệ trưởng phòng).
+// Không ném lỗi ra ngoài (chạy nền).
+async function notifyStepCompleted(projectId, nodeId, statusLabel) {
+  if (!remindersEnabled || !isLarkConfigured) return { ok: false, reason: 'disabled' };
+
+  const { project, nodes } = await getProjectDetail(projectId);
+  const node = (nodes || []).find((n) => n.node_id === nodeId);
+  if (!node) return { ok: false, reason: 'not_found' };
+
+  const dept = (node.dept || '').trim();
+  if (!dept) return { ok: false, reason: 'no_dept' };
+
+  const contactMap = await loadPicContactMap();
+  const leaderMap = await loadLeaderContactMap(contactMap);
+  const contact = leaderMap.get(dept);
+  if (!contact || (!contact.open_id && !contact.email)) {
+    return { ok: false, reason: 'no_leader', dept };
+  }
+
+  const item = {
+    project, node, pic: node.pic || '',
+    dueLabel: '—', kind: 'completed',
+    dedup_key: norm(contact.open_id || contact.email),
+    contact, email: contact.email || null,
+  };
+
+  // Đã báo trưởng phòng này về bước này rồi thì thôi (nếu bảng tồn tại).
+  try {
+    const filtered = await filterUnsent([item]);
+    if (!filtered.remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
+  } catch (err) {
+    if (err.code !== 'NO_TABLE') throw err;
+  }
+
+  const res = await sendToContact(contact, composeCompletedMessage(project, node, statusLabel, node.pic));
+  if (res && res.code === 0) {
+    try {
+      await recordSent([item]);
+    } catch (_e) {
+      // gửi được là chính; ghi dedupe lỗi thì bỏ qua.
+    }
+    return { ok: true, sent: 1, via: contact.open_id ? 'open_id' : 'email' };
+  }
+  return { ok: false, reason: 'send_failed', err: res?.msg };
+}
+
 module.exports = {
   runReminders,
   notifyAssignment,
   notifyNewProjectAssignments,
   notifyStepsStarted,
+  notifyStepCompleted,
 };

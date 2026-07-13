@@ -10,11 +10,12 @@ const {
   getProjectNode,
   updateProjectNode,
   startReadySuccessors,
+  getUnsatisfiedDeps,
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
 const { findMemberByName, listAllMembers } = require('../picMembersService');
-const { notifyStepsStarted } = require('../reminders/reminderService');
+const { notifyStepsStarted, notifyStepCompleted } = require('../reminders/reminderService');
 const {
   sendTextByOpenId,
   sendTextByEmail,
@@ -686,15 +687,34 @@ const tools = {
           payload.pic = target.pic_name; // dùng tên chuẩn trong danh bạ
         }
       }
+      // Điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong' (khớp web).
+      if (payload.actual_date && payload.status === undefined) {
+        payload.status = 'Đã xong';
+      }
+
       if (Object.keys(payload).length === 0) {
         return { error: 'Không có gì để cập nhật.' };
       }
 
+      // Chặn tích 'Đã xong' khi bước phụ thuộc (after) chưa 'Đã xong'/'Bỏ qua'.
+      if (payload.status === 'Đã xong') {
+        const pending = await getUnsatisfiedDeps(match.id, nodeCode);
+        if (pending.length) {
+          return {
+            error: `Chưa thể hoàn tất bước ${nodeCode}: bước phụ thuộc chưa xong/bỏ qua — ${pending.join(', ')}`,
+          };
+        }
+      }
+
       const updated = await updateProjectNode(match.id, nodeCode, payload);
-      // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp sang 'Đang làm'.
+      // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> báo trưởng phòng bước này + mở khoá bước kế tiếp.
       if (updated.status === 'Đã xong' || updated.status === 'Bỏ qua') {
+        // (1) Báo TRƯỞNG PHÒNG của chính bước vừa xong/bỏ qua (Lark DM, chạy nền).
+        notifyStepCompleted(match.id, nodeCode, updated.status).catch((e) =>
+          console.error('[done-notify] lỗi:', e.message),
+        );
+        // (2) Mở khoá bước kế tiếp + báo cho PIC bước kế tiếp (Lark DM, chạy nền).
         const started = await startReadySuccessors(match.id, nodeCode);
-        // Báo cho PIC + trưởng phòng của từng bước vừa mở khoá (Lark DM, chạy nền).
         if (started && started.length) {
           notifyStepsStarted(match.id, started).catch((e) =>
             console.error('[start-notify] lỗi:', e.message),

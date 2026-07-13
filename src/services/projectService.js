@@ -132,6 +132,24 @@ async function updateProjectNode(projectId, nodeId, payload) {
 // tự chuyển 'Chưa làm' -> 'Đang làm'. "Đủ điều kiện" = mọi bước phụ thuộc (after)
 // đã 'Đã xong' hoặc 'Bỏ qua'. Trả về danh sách node_id vừa được mở.
 const SATISFIED_DEP = new Set(['Đã xong', 'Bỏ qua']);
+
+// Trả về danh sách node_id các bước phụ thuộc (after) CHƯA 'Đã xong'/'Bỏ qua'.
+// Rỗng = đủ điều kiện để tích 'Đã xong'. Bỏ qua dep trỏ tới bước không tồn tại.
+async function getUnsatisfiedDeps(projectId, nodeId) {
+  const supabase = getSupabaseClient();
+  const { data: nodes, error } = await supabase
+    .from('project_nodes')
+    .select('node_id,status,after')
+    .eq('project_id', projectId);
+  if (error) throw error;
+  const byId = new Map((nodes || []).map((n) => [n.node_id, n]));
+  const self = byId.get(nodeId);
+  const deps = self && Array.isArray(self.after) ? self.after : [];
+  return deps.filter((d) => {
+    const dep = byId.get(d);
+    return dep && !SATISFIED_DEP.has(dep.status);
+  });
+}
 async function startReadySuccessors(projectId, completedNodeId) {
   const supabase = getSupabaseClient();
   const { data: nodes, error } = await supabase
@@ -353,6 +371,7 @@ module.exports = {
   getProjectNode,
   updateProjectNode,
   startReadySuccessors,
+  getUnsatisfiedDeps,
   seedFromJsonFile,
   seedFromPayload,
 };

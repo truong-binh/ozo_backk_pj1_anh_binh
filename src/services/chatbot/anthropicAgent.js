@@ -59,7 +59,12 @@ async function callAnthropic(body) {
   }
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(`Anthropic ${res.status}: ${data?.error?.message || JSON.stringify(data)}`);
+    const msg = data?.error?.message || JSON.stringify(data);
+    console.error('[anthropic] lỗi API', res.status, msg);
+    const err = new Error(`Anthropic ${res.status}: ${msg}`);
+    err.status = res.status;
+    err.apiMessage = msg;
+    throw err;
   }
   return data;
 }
@@ -137,6 +142,13 @@ async function runAgent(userText, history, ctx) {
     if (err.status === 429) {
       return {
         text: `⏳ Hệ thống đang bận (giới hạn tốc độ). Bạn thử lại sau ${err.retrySec || 30} giây nhé.`,
+        history: history || [],
+      };
+    }
+    // Lỗi API khác (401 sai key, 400 sai request, 402 hết credit...) -> nêu rõ lý do.
+    if (err.status) {
+      return {
+        text: `⚠️ Lỗi gọi Claude (HTTP ${err.status}): ${err.apiMessage || err.message}`,
         history: history || [],
       };
     }

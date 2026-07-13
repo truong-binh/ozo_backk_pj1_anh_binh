@@ -8,6 +8,7 @@ const {
       getProjectNode,
       updateProjectNode,
       startReadySuccessors,
+      getUnsatisfiedDeps,
       seedFromJsonFile,
       seedFromPayload,
 } = require("../services/projectService");
@@ -16,6 +17,7 @@ const {
       notifyAssignment,
       notifyNewProjectAssignments,
       notifyStepsStarted,
+      notifyStepCompleted,
 } = require("../services/reminders/reminderService");
 
 async function getProjects(req, res) {
@@ -147,6 +149,16 @@ async function patchProjectNode(req, res) {
             payload.status = "Đã xong";
       }
 
+      // Chặn tích 'Đã xong' khi bước phụ thuộc (after) chưa 'Đã xong'/'Bỏ qua'.
+      if (payload.status === "Đã xong") {
+            const pending = await getUnsatisfiedDeps(projectId, nodeId);
+            if (pending.length) {
+                  return res.status(409).json({
+                        error: `Chưa thể hoàn tất: bước phụ thuộc chưa xong/bỏ qua — ${pending.join(", ")}`,
+                  });
+            }
+      }
+
       // Sau khi lọc quyền, nếu không còn gì để cập nhật -> trả về bước hiện tại.
       if (Object.keys(payload).length === 0) {
             const detail = await getProjectDetail(projectId);
@@ -158,8 +170,12 @@ async function patchProjectNode(req, res) {
 
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
       if (data.status === "Đã xong" || data.status === "Bỏ qua") {
+            // (1) Báo TRƯỞNG PHÒNG của chính bước vừa xong/bỏ qua (Lark DM, chạy nền).
+            notifyStepCompleted(projectId, nodeId, data.status).catch((e) =>
+                  console.error("[done-notify] lỗi:", e.message),
+            );
+            // (2) Mở khoá bước kế tiếp + báo cho PIC bước kế tiếp (Lark DM, chạy nền).
             const started = await startReadySuccessors(projectId, nodeId);
-            // Báo cho PIC + trưởng phòng của từng bước vừa mở khoá (Lark DM, chạy nền).
             if (started && started.length) {
                   notifyStepsStarted(projectId, started).catch((e) =>
                         console.error("[start-notify] lỗi:", e.message),
