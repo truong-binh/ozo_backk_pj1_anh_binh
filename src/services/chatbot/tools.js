@@ -13,8 +13,32 @@ const {
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
-const { findMemberByName } = require('../picMembersService');
+const { findMemberByName, listAllMembers } = require('../picMembersService');
 const { notifyStepsStarted } = require('../reminders/reminderService');
+const {
+  sendTextByOpenId,
+  sendTextByEmail,
+  isLarkConfigured,
+} = require('../lark/larkClient');
+
+// Gửi 1 DM cho 1 thành viên: ưu tiên open_id, lỗi thì fallback email.
+async function dmContact(member, text) {
+  if (member.open_id) {
+    const r = await sendTextByOpenId(member.open_id, text);
+    if (r && r.code === 0) return { ok: true, via: 'open_id' };
+    if (member.email) {
+      const r2 = await sendTextByEmail(member.email, text);
+      if (r2 && r2.code === 0) return { ok: true, via: 'email' };
+      return { ok: false, err: r2?.msg || r?.msg };
+    }
+    return { ok: false, err: r?.msg };
+  }
+  if (member.email) {
+    const r = await sendTextByEmail(member.email, text);
+    return r && r.code === 0 ? { ok: true, via: 'email' } : { ok: false, err: r?.msg };
+  }
+  return { ok: false, err: 'no-contact' };
+}
 
 const STATUS_OPTIONS = ['Chưa làm', 'Đang làm', 'Đã xong', 'Tạm dừng', 'Bỏ qua'];
 
@@ -408,6 +432,98 @@ const tools = {
           duration: updated.duration,
           notes: updated.notes,
         },
+      };
+    },
+  },
+
+  ask_pics: {
+    declaration: {
+      name: 'ask_pics',
+      description:
+        'Gửi hộ 1 tin nhắn/câu hỏi từ TRƯỞNG PHÒNG tới các PIC qua Lark DM. Bot tự chèn dòng ghi rõ người gửi. Mặc định gửi cho TẤT CẢ PIC (không giới hạn cùng phòng); có thể giới hạn theo 1 phòng (dept) hoặc gửi cho 1 PIC cụ thể (pic_name). Chỉ TRƯỞNG PHÒNG dùng được. LUÔN tóm tắt nội dung + danh sách người nhận và HỎI XÁC NHẬN trước khi gửi.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          message: { type: 'STRING', description: 'nội dung tin nhắn/câu hỏi cần gửi' },
+          dept: {
+            type: 'STRING',
+            description: 'chỉ gửi cho PIC của 1 phòng cụ thể (tùy chọn; bỏ trống = tất cả PIC)',
+          },
+          pic_name: {
+            type: 'STRING',
+            description: 'chỉ gửi cho 1 PIC cụ thể (tùy chọn)',
+          },
+        },
+        required: ['message'],
+      },
+    },
+    async execute(args, ctx) {
+      const leadDepts = Array.isArray(ctx.leadDepts) ? ctx.leadDepts : [];
+      if (!ctx.authed || leadDepts.length === 0) {
+        return {
+          error:
+            'Chức năng gửi tin cho PIC chỉ dành cho TRƯỞNG PHÒNG (email Lark của bạn phải là trưởng phòng trong pic_members).',
+        };
+      }
+      if (!isLarkConfigured) {
+        return { error: 'Lark chưa được cấu hình nên không gửi được tin.' };
+      }
+      const message = String(args.message || '').trim();
+      if (!message) return { error: 'Nội dung tin nhắn đang trống.' };
+
+      const all = await listAllMembers();
+      const myName = norm(ctx.picName);
+      // Người nhận: mọi PIC có liên hệ Lark, trừ chính người gửi.
+      let recipients = all.filter(
+        (m) => (m.open_id || m.email) && norm(m.pic_name) !== myName,
+      );
+
+      // Giới hạn theo phòng (nếu có) — trưởng phòng gửi được cho phòng bất kỳ.
+      if (args.dept) {
+        const d = norm(args.dept);
+        recipients = recipients.filter((m) => norm(m.dept) === d);
+        if (recipients.length === 0) {
+          return { error: `Không có PIC nào (có liên hệ Lark) thuộc phòng "${args.dept}".` };
+        }
+      }
+
+      // Giới hạn theo 1 PIC cụ thể (nếu có).
+      if (args.pic_name) {
+        const want = norm(args.pic_name);
+        recipients = recipients.filter(
+          (m) => norm(m.pic_name).includes(want) || want.includes(norm(m.pic_name)),
+        );
+        if (recipients.length === 0) {
+          return {
+            error: `Không tìm thấy PIC "${args.pic_name}" (có liên hệ Lark) để gửi.`,
+          };
+        }
+      }
+
+      if (recipients.length === 0) {
+        return { error: 'Không có PIC nào có liên hệ Lark để gửi.' };
+      }
+
+      const senderLine = `— Người gửi: ${ctx.picName || 'Trưởng phòng'} (Trưởng phòng ${leadDepts.join(', ')})`;
+      const text = `💬 Tin nhắn từ trưởng phòng – Feelex QLDA\n\n${message}\n\n${senderLine}`;
+
+      const sent = [];
+      const failed = [];
+      for (const m of recipients) {
+        const r = await dmContact(m, text);
+        if (r.ok) sent.push({ pic: m.pic_name, dept: m.dept, via: r.via });
+        else failed.push({ pic: m.pic_name, dept: m.dept, err: r.err });
+      }
+
+      return {
+        ok: sent.length > 0,
+        sender: ctx.picName || null,
+        scope: args.pic_name ? `PIC ${args.pic_name}` : args.dept ? `phòng ${args.dept}` : 'tất cả PIC',
+        sent_count: sent.length,
+        sent,
+        failed_count: failed.length,
+        failed: failed.length ? failed : undefined,
+        message_sent: text,
       };
     },
   },
