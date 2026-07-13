@@ -8,6 +8,7 @@ const {
       getProjectNode,
       updateProjectNode,
       startReadySuccessors,
+      revertDependentsToNotStarted,
       getUnsatisfiedDeps,
       seedFromJsonFile,
       seedFromPayload,
@@ -181,6 +182,10 @@ async function patchProjectNode(req, res) {
                         console.error("[start-notify] lỗi:", e.message),
                   );
             }
+      } else if (payload.status !== undefined) {
+            // Bước RỜI trạng thái hoàn tất (vd 'Đã xong' -> 'Đang làm') -> các bước
+            // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
+            await revertDependentsToNotStarted(projectId, nodeId);
       }
 
       // Vừa phân/đổi PIC -> gửi ngay thông báo "việc mới được giao" cho PIC (Lark DM).

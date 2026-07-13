@@ -10,6 +10,7 @@ const {
   getProjectNode,
   updateProjectNode,
   startReadySuccessors,
+  revertDependentsToNotStarted,
   getUnsatisfiedDeps,
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
@@ -720,6 +721,10 @@ const tools = {
             console.error('[start-notify] lỗi:', e.message),
           );
         }
+      } else if (payload.status !== undefined) {
+        // Bước RỜI trạng thái hoàn tất (vd 'Đã xong' -> 'Đang làm') -> các bước
+        // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
+        await revertDependentsToNotStarted(match.id, nodeCode);
       }
       return {
         ok: true,

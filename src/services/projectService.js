@@ -181,6 +181,63 @@ async function startReadySuccessors(projectId, completedNodeId) {
   return toStart;
 }
 
+// Nghịch đảo startReadySuccessors: khi 1 bước RỜI trạng thái hoàn tất
+// ('Đã xong'/'Bỏ qua' -> 'Đang làm'/'Chưa làm'/'Tạm dừng'), mọi bước phụ thuộc nó
+// (trực tiếp & gián tiếp) đang ở trạng thái đã mở khoá/hoàn tất phải quay về
+// 'Chưa làm' và xoá ngày thực tế. 'Bỏ qua' được giữ nguyên (bỏ qua có chủ đích).
+// Trả về danh sách node_id vừa bị đưa về 'Chưa làm'.
+const REVERTABLE = new Set(['Đang làm', 'Đã xong', 'Tạm dừng']);
+async function revertDependentsToNotStarted(projectId, changedNodeId) {
+  const supabase = getSupabaseClient();
+  const { data: nodes, error } = await supabase
+    .from('project_nodes')
+    .select('node_id,status,after')
+    .eq('project_id', projectId);
+  if (error) throw error;
+
+  const byId = new Map((nodes || []).map((n) => [n.node_id, n]));
+  // successorsOf[id] = các bước phụ thuộc trực tiếp vào id.
+  const successorsOf = new Map();
+  for (const n of nodes || []) {
+    const deps = Array.isArray(n.after) ? n.after : [];
+    for (const d of deps) {
+      if (!successorsOf.has(d)) successorsOf.set(d, []);
+      successorsOf.get(d).push(n.node_id);
+    }
+  }
+
+  const reverted = [];
+  const visited = new Set();
+  const queue = [changedNodeId];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const sid of successorsOf.get(cur) || []) {
+      if (visited.has(sid)) continue;
+      const s = byId.get(sid);
+      if (!s || !REVERTABLE.has(s.status)) continue; // 'Chưa làm'/'Bỏ qua' -> để yên
+      const deps = Array.isArray(s.after) ? s.after : [];
+      const hasUnsatisfied = deps.some((d) => {
+        const dep = byId.get(d);
+        return dep && !SATISFIED_DEP.has(dep.status);
+      });
+      if (!hasUnsatisfied) continue; // mọi dep còn thoả -> không đụng
+      visited.add(sid);
+      reverted.push(sid);
+      s.status = 'Chưa làm'; // cập nhật trong bộ nhớ để cascade tính đúng
+      queue.push(sid);
+    }
+  }
+
+  for (const nid of reverted) {
+    await supabase
+      .from('project_nodes')
+      .update({ status: 'Chưa làm', actual_date: null })
+      .eq('project_id', projectId)
+      .eq('node_id', nid);
+  }
+  return reverted;
+}
+
 async function listProjectsWithNodes() {
   const supabase = getSupabaseClient();
 
@@ -371,6 +428,7 @@ module.exports = {
   getProjectNode,
   updateProjectNode,
   startReadySuccessors,
+  revertDependentsToNotStarted,
   getUnsatisfiedDeps,
   seedFromJsonFile,
   seedFromPayload,
