@@ -245,6 +245,73 @@ const tools = {
     },
   },
 
+  projects_at_stage: {
+    declaration: {
+      name: 'projects_at_stage',
+      description:
+        'Liệt kê các DỰ ÁN đang ở 1 giai đoạn/bước cụ thể theo BƯỚC HIỆN TẠI. Truyền stage = 1 chữ cái giai đoạn A–G (vd "B") hoặc mã bước cụ thể (vd "B2"). Bỏ trống = trả bước hiện tại của MỌI dự án. "Bước hiện tại" = bước "Đang làm" đầu tiên; nếu không có thì bước "Chưa làm"/"Tạm dừng" gần nhất — khớp với "Bước hiện tại" ở trang tổng quan. DÙNG tool này cho câu hỏi "dự án đang ở bước/giai đoạn nào"; KHÔNG tự bịa danh sách.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          stage: {
+            type: 'STRING',
+            description: 'giai đoạn A–G hoặc mã bước, vd "B" hoặc "B2" (tùy chọn)',
+          },
+        },
+      },
+    },
+    async execute({ stage } = {}) {
+      const all = await listProjectsWithNodes();
+      const q = String(stage || '').trim().toUpperCase();
+      const isCode = /^[A-G]\d+$/.test(q);
+      const isLetter = /^[A-G]$/.test(q);
+      if (q && !isCode && !isLetter) {
+        return { error: `stage "${stage}" không hợp lệ. Dùng chữ cái A–G (vd "B") hoặc mã bước (vd "B2").` };
+      }
+
+      const stageOf = (code) => String(code || '').charAt(0).toUpperCase();
+      const rows = [];
+      for (const detail of all) {
+        const nodes = detail.nodes || [];
+        // Bước hiện tại: giống trang tổng quan (Đang làm > Chưa làm > Tạm dừng).
+        const current =
+          nodes.find((n) => n.status === 'Đang làm') ||
+          nodes.find((n) => n.status === 'Chưa làm') ||
+          nodes.find((n) => n.status === 'Tạm dừng') ||
+          null;
+        const activeSteps = nodes
+          .filter((n) => n.status === 'Đang làm')
+          .map((n) => ({ code: n.node_id, name: n.node_name, pic: n.pic || '(chưa gán)' }));
+        rows.push({
+          project_code: detail.project.code,
+          project_name: detail.project.name,
+          current_step: current
+            ? {
+                code: current.node_id,
+                name: current.node_name,
+                status: current.status,
+                pic: current.pic || '(chưa gán)',
+              }
+            : null, // null = đã hoàn tất mọi bước
+          active_steps: activeSteps,
+        });
+      }
+
+      if (!q) return { count: rows.length, projects: rows };
+
+      const matched = rows.filter((r) => {
+        if (isCode) {
+          if (r.current_step && r.current_step.code === q) return true;
+          return r.active_steps.some((s) => s.code === q);
+        }
+        // isLetter
+        if (r.current_step && stageOf(r.current_step.code) === q) return true;
+        return r.active_steps.some((s) => stageOf(s.code) === q);
+      });
+      return { stage: q, count: matched.length, projects: matched };
+    },
+  },
+
   explain_workflow: {
     declaration: {
       name: 'explain_workflow',
