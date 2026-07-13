@@ -10,6 +10,7 @@ const { uploadRoutes } = require('./routes/uploadRoutes');
 const { larkRoutes } = require('./routes/larkRoutes');
 const { reminderRoutes } = require('./routes/reminderRoutes');
 const { picMembersRoutes } = require('./routes/picMembersRoutes');
+const { feedbackRoutes } = require('./routes/feedbackRoutes');
 const { isLarkConfigured } = require('./services/lark/larkClient');
 const { isLlmConfigured, provider: llmProviderName } = require('./services/chatbot/agent');
 const { requireAuth } = require('./middleware/auth');
@@ -44,6 +45,8 @@ app.use('/api/uploads', requireAuth, uploadRoutes);
 app.use('/api/projects', requireAuth, projectRoutes);
 app.use('/api/reminders', requireAuth, reminderRoutes);
 app.use('/api/pic-members', requireAuth, picMembersRoutes);
+// Góp ý & feedback chatbot: xem/xoá — chỉ Quản lý (kiểm trong route).
+app.use('/api/feedback', requireAuth, feedbackRoutes);
 
 app.use((error, req, res, next) => {
   console.error(error);

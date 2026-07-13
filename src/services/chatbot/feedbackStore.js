@@ -41,4 +41,49 @@ async function saveSuggestion({ chatId, openId, picName, message }) {
   }
 }
 
-module.exports = { saveFeedback, saveSuggestion };
+// ----- Quản lý: xem & xử lý (xoá) góp ý / feedback -----
+
+async function listFeedback() {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from('chatbot_feedback')
+    .select('id,chat_id,pic_name,question,answer,rating,provider,created_at,rated_at')
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+}
+
+async function deleteFeedback(id) {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from('chatbot_feedback').delete().eq('id', id);
+  if (error) throw error;
+  return true;
+}
+
+async function listSuggestions() {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from('chatbot_suggestions')
+    .select('id,chat_id,pic_name,message,handled,created_at')
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+}
+
+async function deleteSuggestion(id) {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from('chatbot_suggestions').delete().eq('id', id);
+  if (error) throw error;
+  return true;
+}
+
+module.exports = {
+  saveFeedback,
+  saveSuggestion,
+  listFeedback,
+  deleteFeedback,
+  listSuggestions,
+  deleteSuggestion,
+};
