@@ -7,6 +7,14 @@ function parseList(value) {
     .filter(Boolean);
 }
 
+// Như parseList nhưng GIỮ NGUYÊN hoa/thường (open_id của Lark phân biệt hoa thường).
+function parseListRaw(value) {
+  return String(value || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 module.exports = {
   port: Number(process.env.PORT || 4000),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -67,6 +75,10 @@ module.exports = {
   // Nhắc việc cho PIC qua Lark (scheduler chạy 8–17h giờ VN, mỗi giờ 1 lần).
   // Đặt REMINDERS_ENABLED=false để tắt.
   remindersEnabled: String(process.env.REMINDERS_ENABLED || 'true').toLowerCase() !== 'false',
+
+  // Người theo dõi: nhận DM MỌI bước 'Đã xong'/'Bỏ qua' (ngoài trưởng phòng của bước đó).
+  // Điền open_id lấy từ cột open_id bảng pic_members, nhiều người cách nhau dấu phẩy.
+  stepDoneWatcherOpenIds: parseListRaw(process.env.STEP_DONE_WATCHER_OPEN_IDS),
 
   // Báo cáo tiến độ gửi vào nhóm Lark mỗi 9h sáng (giờ VN).
   // LARK_REPORT_CHAT_ID: chat_id nhóm nhận báo cáo (nhiều nhóm cách nhau dấu phẩy).

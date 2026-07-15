@@ -10,7 +10,7 @@ const { listProjectsWithNodes, getProjectDetail } = require('../projectService')
 const { getSupabaseClient } = require('../../config/supabaseClient');
 const { computeAllDates } = require('../../utils/datePlanner');
 const { sendTextByEmail, sendTextByOpenId, isLarkConfigured } = require('../lark/larkClient');
-const { remindersEnabled } = require('../../config/env');
+const { remindersEnabled, stepDoneWatcherOpenIds } = require('../../config/env');
 const { getDeptLeaderMap, isLeaderLabel, deptFromLeaderLabel } = require('../picMembersService');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -525,7 +525,10 @@ function composeCompletedMessage(project, node, statusLabel, pic) {
 // Gửi NGAY cho TRƯỞNG PHÒNG của chính bước vừa 'Đã xong'/'Bỏ qua' để họ nắm bước
 // của phòng mình đã kết thúc. Chỉ gửi trưởng phòng (không gửi PIC bước này).
 // Nếu PIC bước này chính là trưởng phòng thì vẫn nhận (họ là trưởng phòng).
-// Dedupe qua sent_reminders (kind 'completed', dedup_key = liên hệ trưởng phòng).
+// Ngoài ra gửi thêm cho NGƯỜI THEO DÕI khai trong STEP_DONE_WATCHER_OPEN_IDS —
+// họ nhận mọi bước xong/bỏ qua, kể cả bước không có dept hoặc phòng chưa có trưởng phòng.
+// Dedupe qua sent_reminders (kind 'completed', dedup_key = liên hệ người nhận); người
+// theo dõi trùng trưởng phòng thì chỉ nhận 1 tin.
 // Không ném lỗi ra ngoài (chạy nền).
 async function notifyStepCompleted(projectId, nodeId, statusLabel) {
   if (!remindersEnabled || !isLarkConfigured) return { ok: false, reason: 'disabled' };
@@ -535,40 +538,63 @@ async function notifyStepCompleted(projectId, nodeId, statusLabel) {
   if (!node) return { ok: false, reason: 'not_found' };
 
   const dept = (node.dept || '').trim();
-  if (!dept) return { ok: false, reason: 'no_dept' };
+  const recipients = [];
+  const seen = new Set(); // theo dedup_key -> tránh gửi 2 lần cho cùng 1 người
 
-  const contactMap = await loadPicContactMap();
-  const leaderMap = await loadLeaderContactMap(contactMap);
-  const contact = leaderMap.get(dept);
-  if (!contact || (!contact.open_id && !contact.email)) {
-    return { ok: false, reason: 'no_leader', dept };
+  if (dept) {
+    const contactMap = await loadPicContactMap();
+    const leaderMap = await loadLeaderContactMap(contactMap);
+    const leader = leaderMap.get(dept);
+    if (leader && (leader.open_id || leader.email)) {
+      recipients.push(leader);
+      seen.add(norm(leader.open_id || leader.email));
+    }
   }
 
-  const item = {
+  for (const openId of stepDoneWatcherOpenIds) {
+    const key = norm(openId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recipients.push({ open_id: openId, email: null });
+  }
+
+  if (!recipients.length) return { ok: false, reason: 'no_recipient', dept };
+
+  const items = recipients.map((contact) => ({
     project, node, pic: node.pic || '',
     dueLabel: '—', kind: 'completed',
     dedup_key: norm(contact.open_id || contact.email),
     contact, email: contact.email || null,
-  };
+  }));
 
-  // Đã báo trưởng phòng này về bước này rồi thì thôi (nếu bảng tồn tại).
+  // Ai đã được báo về bước này rồi thì bỏ qua (nếu bảng tồn tại).
+  let remaining = items;
   try {
-    const filtered = await filterUnsent([item]);
-    if (!filtered.remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
+    const filtered = await filterUnsent(items);
+    remaining = filtered.remaining;
   } catch (err) {
     if (err.code !== 'NO_TABLE') throw err;
   }
+  if (!remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
 
-  const res = await sendToContact(contact, composeCompletedMessage(project, node, statusLabel, node.pic));
-  if (res && res.code === 0) {
+  const text = composeCompletedMessage(project, node, statusLabel, node.pic);
+  const sent = [];
+  const failed = [];
+  for (const it of remaining) {
+    const res = await sendToContact(it.contact, text);
+    if (res && res.code === 0) sent.push(it);
+    else failed.push({ dedup_key: it.dedup_key, err: res?.msg });
+  }
+
+  if (sent.length) {
     try {
-      await recordSent([item]);
+      await recordSent(sent);
     } catch (_e) {
       // gửi được là chính; ghi dedupe lỗi thì bỏ qua.
     }
-    return { ok: true, sent: 1, via: contact.open_id ? 'open_id' : 'email' };
   }
-  return { ok: false, reason: 'send_failed', err: res?.msg };
+  if (!sent.length) return { ok: false, reason: 'send_failed', failed };
+  return { ok: true, sent: sent.length, failed: failed.length ? failed : undefined };
 }
 
 module.exports = {
