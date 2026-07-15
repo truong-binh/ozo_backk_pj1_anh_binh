@@ -593,8 +593,8 @@ const tools = {
         can_edit: !ctx.authed
           ? 'Chỉ xem. Email Lark của bạn chưa nằm trong danh sách PIC.'
           : isLeader
-            ? `Trưởng phòng ${leadDepts.join(', ')}: sửa mọi bước thuộc phòng này (kể cả đổi PIC), và các bước gán cho bạn.`
-            : `Thuộc phòng ${ctx.dept || '—'}. Sửa các bước có PIC = tên bạn; được chuyển bước của mình cho PIC khác CÙNG PHÒNG. (Bạn KHÔNG phải trưởng phòng nên không sửa được mọi bước của phòng.)`,
+            ? `Trưởng phòng ${leadDepts.join(', ')}: sửa mọi bước thuộc phòng này (kể cả đổi PIC), và các bước gán cho bạn. Nhờ bot gửi tin được cho mọi PIC.`
+            : `Thuộc phòng ${ctx.dept || '—'}. Sửa các bước có PIC = tên bạn; được chuyển bước của mình cho PIC khác CÙNG PHÒNG. Nhờ bot gửi tin được cho PIC cùng phòng. (Bạn KHÔNG phải trưởng phòng nên không sửa được mọi bước của phòng.)`,
       };
     },
   },
@@ -807,14 +807,15 @@ const tools = {
     declaration: {
       name: 'ask_pics',
       description:
-        'Gửi hộ 1 tin nhắn/câu hỏi từ TRƯỞNG PHÒNG tới các PIC qua Lark DM. Bot tự chèn dòng ghi rõ người gửi. Mặc định gửi cho TẤT CẢ PIC (không giới hạn cùng phòng); có thể giới hạn theo 1 phòng (dept) hoặc gửi cho 1 PIC cụ thể (pic_name). Chỉ TRƯỞNG PHÒNG dùng được. LUÔN tóm tắt nội dung + danh sách người nhận và HỎI XÁC NHẬN trước khi gửi.',
+        'Gửi hộ 1 tin nhắn/câu hỏi tới các PIC qua Lark DM. Bot tự chèn dòng ghi rõ người gửi. PIC thường: chỉ gửi được cho PIC CÙNG PHÒNG (mặc định cả phòng, hoặc 1 người qua pic_name). TRƯỞNG PHÒNG: gửi được cho TẤT CẢ PIC, hoặc giới hạn theo 1 phòng (dept) / 1 PIC (pic_name). LUÔN tóm tắt nội dung + danh sách người nhận và HỎI XÁC NHẬN trước khi gửi.',
       parameters: {
         type: 'OBJECT',
         properties: {
           message: { type: 'STRING', description: 'nội dung tin nhắn/câu hỏi cần gửi' },
           dept: {
             type: 'STRING',
-            description: 'chỉ gửi cho PIC của 1 phòng cụ thể (tùy chọn; bỏ trống = tất cả PIC)',
+            description:
+              'chỉ gửi cho PIC của 1 phòng cụ thể (tùy chọn; chỉ trưởng phòng dùng được — PIC thường luôn bị giới hạn trong phòng của mình)',
           },
           pic_name: {
             type: 'STRING',
@@ -826,10 +827,16 @@ const tools = {
     },
     async execute(args, ctx) {
       const leadDepts = Array.isArray(ctx.leadDepts) ? ctx.leadDepts : [];
-      if (!ctx.authed || leadDepts.length === 0) {
+      const isLeader = leadDepts.length > 0;
+      if (!ctx.authed) {
         return {
           error:
-            'Chức năng gửi tin cho PIC chỉ dành cho TRƯỞNG PHÒNG (email Lark của bạn phải là trưởng phòng trong pic_members).',
+            'Chức năng gửi tin cho PIC chỉ dành cho PIC (email/Lark của bạn phải có trong pic_members).',
+        };
+      }
+      if (!isLeader && !ctx.dept) {
+        return {
+          error: 'Bạn chưa được gán phòng trong pic_members nên chưa xác định được người nhận cùng phòng.',
         };
       }
       if (!isLarkConfigured) {
@@ -838,6 +845,14 @@ const tools = {
       const message = String(args.message || '').trim();
       if (!message) return { error: 'Nội dung tin nhắn đang trống.' };
 
+      // PIC thường chỉ gửi trong phòng mình; trưởng phòng gửi được phòng bất kỳ.
+      const scopeDept = isLeader ? args.dept : ctx.dept;
+      if (!isLeader && args.dept && norm(args.dept) !== norm(ctx.dept)) {
+        return {
+          error: `Bạn chỉ nhờ bot gửi được cho PIC CÙNG PHÒNG (${ctx.dept}). Muốn gửi cho phòng "${args.dept}" thì cần trưởng phòng.`,
+        };
+      }
+
       const all = await listAllMembers();
       const myName = norm(ctx.picName);
       // Người nhận: mọi PIC có liên hệ Lark, trừ chính người gửi.
@@ -845,12 +860,12 @@ const tools = {
         (m) => (m.open_id || m.email) && norm(m.pic_name) !== myName,
       );
 
-      // Giới hạn theo phòng (nếu có) — trưởng phòng gửi được cho phòng bất kỳ.
-      if (args.dept) {
-        const d = norm(args.dept);
+      // Giới hạn theo phòng (nếu có).
+      if (scopeDept) {
+        const d = norm(scopeDept);
         recipients = recipients.filter((m) => norm(m.dept) === d);
         if (recipients.length === 0) {
-          return { error: `Không có PIC nào (có liên hệ Lark) thuộc phòng "${args.dept}".` };
+          return { error: `Không có PIC nào khác (có liên hệ Lark) thuộc phòng "${scopeDept}".` };
         }
       }
 
@@ -862,7 +877,9 @@ const tools = {
         );
         if (recipients.length === 0) {
           return {
-            error: `Không tìm thấy PIC "${args.pic_name}" (có liên hệ Lark) để gửi.`,
+            error: isLeader
+              ? `Không tìm thấy PIC "${args.pic_name}" (có liên hệ Lark) để gửi.`
+              : `Không tìm thấy PIC "${args.pic_name}" (có liên hệ Lark) trong phòng ${ctx.dept} của bạn.`,
           };
         }
       }
@@ -871,8 +888,10 @@ const tools = {
         return { error: 'Không có PIC nào có liên hệ Lark để gửi.' };
       }
 
-      const senderLine = `— Người gửi: ${ctx.picName || 'Trưởng phòng'} (Trưởng phòng ${leadDepts.join(', ')})`;
-      const text = `💬 Tin nhắn từ trưởng phòng – Feelex QLDA\n\n${message}\n\n${senderLine}`;
+      const senderRole = isLeader ? `Trưởng phòng ${leadDepts.join(', ')}` : `phòng ${ctx.dept}`;
+      const senderLine = `— Người gửi: ${ctx.picName || 'PIC'} (${senderRole})`;
+      const title = isLeader ? '💬 Tin nhắn từ trưởng phòng' : '💬 Tin nhắn từ đồng nghiệp';
+      const text = `${title} – Feelex QLDA\n\n${message}\n\n${senderLine}`;
 
       const sent = [];
       const failed = [];
@@ -885,7 +904,11 @@ const tools = {
       return {
         ok: sent.length > 0,
         sender: ctx.picName || null,
-        scope: args.pic_name ? `PIC ${args.pic_name}` : args.dept ? `phòng ${args.dept}` : 'tất cả PIC',
+        scope: args.pic_name
+          ? `PIC ${args.pic_name}`
+          : scopeDept
+            ? `phòng ${scopeDept}`
+            : 'tất cả PIC',
         sent_count: sent.length,
         sent,
         failed_count: failed.length,
