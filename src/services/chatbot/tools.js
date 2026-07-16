@@ -16,7 +16,13 @@ const {
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
 const { findMemberByName, listAllMembers } = require('../picMembersService');
-const { notifyStepsStarted, notifyStepCompleted } = require('../reminders/reminderService');
+const {
+  notifyStepsStarted,
+  notifyStepCompleted,
+  snapshotDueDates,
+  notifyDueDateChanges,
+  affectsDueDates,
+} = require('../reminders/reminderService');
 const {
   sendTextByOpenId,
   sendTextByEmail,
@@ -707,6 +713,12 @@ const tools = {
         }
       }
 
+      // Chụp ngày dự kiến TRƯỚC khi sửa để biết bước nào bị dời mà báo PIC (xem
+      // notifyDueDateChanges). Chỉ chụp khi payload có thể làm đổi ngày.
+      const dueBefore = affectsDueDates(payload)
+        ? await snapshotDueDates(match.id)
+        : null;
+
       const updated = await updateProjectNode(match.id, nodeCode, payload);
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> báo trưởng phòng bước này + mở khoá bước kế tiếp.
       if (updated.status === 'Đã xong' || updated.status === 'Bỏ qua') {
@@ -726,6 +738,14 @@ const tools = {
         // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
         await revertDependentsToNotStarted(match.id, nodeCode);
       }
+
+      // Báo PIC các bước bị DỜI NGÀY DỰ KIẾN (chạy nền, sau các tác động ở trên).
+      if (dueBefore) {
+        notifyDueDateChanges(match.id, dueBefore).catch((e) =>
+          console.error('[date-notify] lỗi:', e.message),
+        );
+      }
+
       return {
         ok: true,
         project: match.code,

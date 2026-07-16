@@ -1,16 +1,19 @@
-// Nhắc việc cho PIC qua Lark DM. Ba loại nhắc:
-//   - assigned : việc mới được giao (node có PIC) -> GỬI NGAY khi phân PIC (event),
-//                không quét theo giờ nữa; xem notifyAssignment().
-//   - due_soon : trước hạn ~24h (hạn = ngày mai theo giờ VN) -> nhắc 1 lần cho mỗi mốc hạn
-//   - overdue  : quá hạn -> nhắc MỖI NGÀY 1 lần cho tới khi 'Đã xong'/'Bỏ qua'
+// Nhắc việc cho PIC qua Lark DM. Các loại (kind):
+//   - assigned     : việc mới được giao (node có PIC) -> GỬI NGAY khi phân PIC (event),
+//                    không quét theo giờ nữa; xem notifyAssignment().
+//   - due_soon     : trước hạn ~24h (hạn = ngày mai theo giờ VN) -> nhắc 1 lần cho mỗi mốc hạn
+//   - overdue      : quá hạn -> nhắc MỖI NGÀY 1 lần cho tới khi 'Đã xong'/'Bỏ qua'
+//   - started      : bước trước xong -> bước kế tiếp mở khoá; báo PIC bước kế tiếp.
+//   - completed    : bước vừa 'Đã xong'/'Bỏ qua' -> báo trưởng phòng của bước.
+//   - date_changed : ngày dự kiến của bước bị dời -> báo PIC bước đó (event, khi sửa bước).
 // Chống gửi trùng bằng bảng public.sent_reminders (dedup theo project/node/kind/dedup_key).
 // Hạn (due) tính động bằng computeAllDates — không lưu sẵn trong DB.
 
 const { listProjectsWithNodes, getProjectDetail } = require('../projectService');
 const { getSupabaseClient } = require('../../config/supabaseClient');
-const { computeAllDates } = require('../../utils/datePlanner');
+const { computeAllDates, isoLocal } = require('../../utils/datePlanner');
 const { sendTextByEmail, sendTextByOpenId, isLarkConfigured } = require('../lark/larkClient');
-const { remindersEnabled, stepDoneWatcherOpenIds } = require('../../config/env');
+const { remindersEnabled, stepDoneWatcherOpenIds, appUrl } = require('../../config/env');
 const { getDeptLeaderMap, isLeaderLabel, deptFromLeaderLabel } = require('../picMembersService');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -31,6 +34,22 @@ function vnToday() {
 
 function fmtDMY(y, m, d) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
+}
+
+function fmtDate(d) {
+  return fmtDMY(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+// '2026-07-20' -> '20/07/2026' (ảnh chụp ngày dự kiến lưu dạng ISO).
+function fmtIso(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '—';
+}
+
+// Link mở thẳng trang dự án của bước (route frontend: /projects/:projectId).
+// Lark tự nhận diện URL trần thành link bấm được, nên gửi URL nguyên dạng.
+function projectUrl(project) {
+  return `${appUrl.replace(/\/+$/, '')}/projects/${project.id}`;
 }
 
 // Map pic_name (chuẩn hoá) -> { open_id, email } từ pic_members. Gửi ưu tiên
@@ -174,26 +193,33 @@ function composeMessage(list) {
   const byKind = { assigned: [], due_soon: [], overdue: [] };
   for (const it of list) byKind[it.kind].push(it);
 
-  const line = (it) => `• [${it.project.code}] ${it.node.node_id} – ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
-  // Việc mới được giao: kèm TÊN dự án để PIC biết ngay thuộc dự án nào.
-  const assignedLine = (it) =>
+  // Mọi dòng đều kèm TÊN dự án để PIC biết ngay việc thuộc dự án nào, và ngay
+  // dưới là link mở thẳng dự án đó.
+  const line = (it) =>
     `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
   const out = ['📋 Nhắc việc – Feelex QLDA', ''];
+  const pushStep = (text, it) => {
+    out.push(text);
+    out.push(`  ${projectUrl(it.project)}`);
+  };
 
   if (byKind.assigned.length) {
     out.push('🔔 Việc mới được giao:');
-    byKind.assigned.forEach((it) => out.push(assignedLine(it)));
+    byKind.assigned.forEach((it) => pushStep(line(it), it));
     out.push('');
   }
   if (byKind.due_soon.length) {
     out.push('⏰ Sắp đến hạn (trong 24h):');
-    byKind.due_soon.forEach((it) => out.push(line(it)));
+    byKind.due_soon.forEach((it) => pushStep(line(it), it));
     out.push('');
   }
   if (byKind.overdue.length) {
     out.push('⚠️ Việc quá hạn:');
     byKind.overdue.forEach((it) =>
-      out.push(`• [${it.project.code}] ${it.node.node_id} – ${it.node.node_name || ''} (quá hạn ${it.lateDays} ngày, hạn ${it.dueLabel})`),
+      pushStep(
+        `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (quá hạn ${it.lateDays} ngày, hạn ${it.dueLabel})`,
+        it,
+      ),
     );
     out.push('');
   }
@@ -428,7 +454,10 @@ function composeStartedMessage(list) {
   const line = (it) =>
     `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (hạn ${it.dueLabel})`;
   const out = ['✅ Bước trước đã xong – việc kế tiếp sẵn sàng để làm:', ''];
-  list.forEach((it) => out.push(line(it)));
+  list.forEach((it) => {
+    out.push(line(it));
+    out.push(`  ${projectUrl(it.project)}`);
+  });
   out.push('');
   out.push('Nhắn cập nhật cho tôi lúc xong hoặc cập nhật tiến độ trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!');
   return out.join('\n');
@@ -510,6 +539,122 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
   return { ok: true, people: byPerson.size, sent: sentItems.length };
 }
 
+// ---- Đổi ngày dự kiến -------------------------------------------------------
+// "Ngày dự kiến" (cột Dự kiến trên web) = due của computeAllDates — tính động,
+// KHÔNG lưu DB. Sửa 1 bước (số ngày / sau bước / ngày thực tế / bỏ qua) có thể
+// dời ngày của NHIỀU bước phía sau, mỗi bước một PIC. Nên cách duy nhất biết ai
+// bị ảnh hưởng là: chụp ảnh ngày dự kiến TRƯỚC khi sửa, tính lại SAU khi sửa rồi
+// so sánh toàn dự án.
+
+// Các trường khi sửa có thể làm dời ngày dự kiến. 'pic'/'notes' thì không.
+const DATE_FIELDS = ['duration', 'after', 'actual_date', 'status'];
+
+function affectsDueDates(payload) {
+  return DATE_FIELDS.some((f) => payload && payload[f] !== undefined);
+}
+
+// Chụp ảnh ngày dự kiến hiện tại của mọi bước -> { node_id: 'YYYY-MM-DD' }.
+// Gọi TRƯỚC khi sửa; truyền kết quả vào notifyDueDateChanges() sau khi sửa xong.
+// Lỗi thì trả null (không có ảnh -> bỏ qua báo đổi ngày, không phá luồng lưu).
+async function snapshotDueDates(projectId) {
+  try {
+    const { project, nodes } = await getProjectDetail(projectId);
+    const dates = computeAllDates({ project, nodes });
+    const map = {};
+    for (const n of nodes || []) {
+      const due = dates[n.node_id]?.due;
+      if (due) map[n.node_id] = isoLocal(due);
+    }
+    return map;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function composeDateChangedMessage(list) {
+  const out = ['📅 Ngày dự kiến của việc bạn phụ trách vừa thay đổi:', ''];
+  list.forEach((it) => {
+    out.push(
+      `• [${it.project.code}] ${it.project.name || ''} – ${it.node.node_id} ${it.node.node_name || ''} (dự kiến ${it.oldLabel} → ${it.dueLabel})`,
+    );
+    out.push(`  ${projectUrl(it.project)}`);
+  });
+  out.push('');
+  out.push('Nhắn cập nhật cho tôi lúc xong hoặc cập nhật tiến độ trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!');
+  return out.join('\n');
+}
+
+// So ảnh chụp TRƯỚC (before) với ngày dự kiến HIỆN TẠI -> bước nào dời ngày thì
+// báo PIC của chính bước đó (Lark DM). Bỏ qua bước đã 'Đã xong'/'Bỏ qua' (ngày
+// đổi cũng không còn ý nghĩa hành động) và bước mới xuất hiện (không có ảnh cũ).
+// Dedupe qua sent_reminders (kind 'date_changed', dedup_key = 'cũ>mới') -> cùng
+// một lần dời chỉ báo 1 lần, nhưng dời tiếp sang ngày khác thì vẫn báo.
+// Gom theo người -> 1 tin/người. Không ném lỗi ra ngoài (chạy nền).
+async function notifyDueDateChanges(projectId, before) {
+  if (!remindersEnabled || !isLarkConfigured) return { ok: false, reason: 'disabled' };
+  if (!before || !Object.keys(before).length) return { ok: false, reason: 'no_snapshot' };
+
+  const { project, nodes } = await getProjectDetail(projectId);
+  const dates = computeAllDates({ project, nodes });
+  const contactMap = await loadPicContactMap();
+  const leaderMap = await loadLeaderContactMap(contactMap);
+
+  const items = [];
+  for (const node of nodes || []) {
+    if (DONE.has(node.status)) continue;
+    if (!node.pic || !String(node.pic).trim()) continue;
+
+    const due = dates[node.node_id]?.due;
+    if (!due) continue;
+    const newIso = isoLocal(due);
+    const oldIso = before[node.node_id];
+    if (!oldIso || oldIso === newIso) continue; // bước mới, hoặc không dời
+
+    const contact = resolveAssignContact(node.pic, contactMap, leaderMap);
+    if (!contact) continue;
+
+    items.push({
+      project, node, pic: node.pic,
+      oldLabel: fmtIso(oldIso),
+      dueLabel: fmtDate(due),
+      kind: 'date_changed',
+      dedup_key: `${oldIso}>${newIso}`,
+      contact,
+      email: contact.email || null,
+    });
+  }
+  if (!items.length) return { ok: true, sent: 0, note: 'no_change' };
+
+  let remaining = items;
+  try {
+    const filtered = await filterUnsent(items);
+    remaining = filtered.remaining;
+  } catch (err) {
+    if (err.code !== 'NO_TABLE') throw err;
+  }
+  if (!remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
+
+  const byPerson = new Map();
+  for (const it of remaining) {
+    const key = it.contact.open_id || it.contact.email;
+    if (!byPerson.has(key)) byPerson.set(key, { contact: it.contact, list: [] });
+    byPerson.get(key).list.push(it);
+  }
+
+  const sentItems = [];
+  for (const [, { contact, list }] of byPerson) {
+    const res = await sendToContact(contact, composeDateChangedMessage(list));
+    if (res && res.code === 0) sentItems.push(...list);
+  }
+  try {
+    await recordSent(sentItems);
+  } catch (_e) {
+    // bảng chưa có -> đã gửi là chính, bỏ qua ghi dedupe.
+  }
+
+  return { ok: true, people: byPerson.size, sent: sentItems.length };
+}
+
 function composeCompletedMessage(project, node, statusLabel, pic) {
   const verb = statusLabel === 'Bỏ qua' ? 'đã được BỎ QUA' : 'đã HOÀN TẤT';
   const who = pic && String(pic).trim() ? ` (PIC: ${String(pic).trim()})` : '';
@@ -517,6 +662,7 @@ function composeCompletedMessage(project, node, statusLabel, pic) {
     `✅ Bước ${verb}:`,
     '',
     `• [${project.code}] ${project.name || ''} – ${node.node_id} ${node.node_name || ''}${who}`,
+    `  ${projectUrl(project)}`,
     '',
     'Xem chi tiết trên Feelex QLDA - https://ozo-truong-binhs-projects.vercel.app. Cảm ơn bạn!',
   ].join('\n');
@@ -603,4 +749,7 @@ module.exports = {
   notifyNewProjectAssignments,
   notifyStepsStarted,
   notifyStepCompleted,
+  snapshotDueDates,
+  notifyDueDateChanges,
+  affectsDueDates,
 };

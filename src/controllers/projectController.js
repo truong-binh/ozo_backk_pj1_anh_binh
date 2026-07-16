@@ -19,6 +19,9 @@ const {
       notifyNewProjectAssignments,
       notifyStepsStarted,
       notifyStepCompleted,
+      snapshotDueDates,
+      notifyDueDateChanges,
+      affectsDueDates,
 } = require("../services/reminders/reminderService");
 
 async function getProjects(req, res) {
@@ -167,6 +170,13 @@ async function patchProjectNode(req, res) {
             return res.json(current || {});
       }
 
+      // Ngày dự kiến tính động theo cả chuỗi bước -> chụp ảnh TRƯỚC khi sửa để
+      // sau đó biết bước nào bị dời ngày mà báo PIC. Chỉ chụp khi payload có thể
+      // làm đổi ngày (khỏi tốn 1 lượt đọc cho các sửa đổi như PIC/ghi chú).
+      const dueBefore = affectsDueDates(payload)
+            ? await snapshotDueDates(projectId)
+            : null;
+
       const data = await updateProjectNode(projectId, nodeId, payload);
 
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
@@ -193,6 +203,14 @@ async function patchProjectNode(req, res) {
       if (payload.pic !== undefined) {
             notifyAssignment(projectId, nodeId).catch((e) =>
                   console.error("[assign-notify] lỗi:", e.message),
+            );
+      }
+
+      // Báo PIC các bước bị DỜI NGÀY DỰ KIẾN. Chạy SAU cùng để ảnh so sánh gồm
+      // cả tác động của startReadySuccessors/revertDependentsToNotStarted ở trên.
+      if (dueBefore) {
+            notifyDueDateChanges(projectId, dueBefore).catch((e) =>
+                  console.error("[date-notify] lỗi:", e.message),
             );
       }
 
