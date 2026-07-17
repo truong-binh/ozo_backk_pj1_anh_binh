@@ -16,6 +16,7 @@ const {
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
 const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
 const { findMemberByName, listAllMembers } = require('../picMembersService');
+const { toPicArray, picText } = require('../../utils/pic');
 const {
   notifyStepsStarted,
   notifyStepCompleted,
@@ -86,7 +87,7 @@ function summarizeNode(detail, node, dates) {
     name: node.node_name,
     stage: node.stage,
     status: node.status,
-    pic: node.pic || '(chưa gán)',
+    pic: picText(node.pic) || '(chưa gán)',
     dept: node.dept || '',
     duration: node.duration,
     after: node.after || [],
@@ -211,7 +212,7 @@ const tools = {
       let nodes = detail.nodes;
       if (status) nodes = nodes.filter((n) => norm(n.status) === norm(status));
       if (dept) nodes = nodes.filter((n) => norm(n.dept) === norm(dept));
-      if (pic) nodes = nodes.filter((n) => norm(n.pic).includes(norm(pic)));
+      if (pic) nodes = nodes.filter((n) => toPicArray(n.pic).some((p) => norm(p).includes(norm(pic))));
       return {
         project: { id: match.id, code: match.code, name: match.name },
         count: nodes.length,
@@ -240,7 +241,7 @@ const tools = {
       for (const detail of all) {
         const dates = computeAllDates(detail);
         for (const n of detail.nodes) {
-          if (norm(n.pic).includes(target) && target) {
+          if (target && toPicArray(n.pic).some((p) => norm(p).includes(target))) {
             out.push({
               project_code: detail.project.code,
               project_name: detail.project.name,
@@ -289,7 +290,7 @@ const tools = {
           null;
         const activeSteps = nodes
           .filter((n) => n.status === 'Đang làm')
-          .map((n) => ({ code: n.node_id, name: n.node_name, pic: n.pic || '(chưa gán)' }));
+          .map((n) => ({ code: n.node_id, name: n.node_name, pic: picText(n.pic) || '(chưa gán)' }));
         rows.push({
           project_code: detail.project.code,
           project_name: detail.project.name,
@@ -298,7 +299,7 @@ const tools = {
                 code: current.node_id,
                 name: current.node_name,
                 status: current.status,
-                pic: current.pic || '(chưa gán)',
+                pic: picText(current.pic) || '(chưa gán)',
               }
             : null, // null = đã hoàn tất mọi bước
           active_steps: activeSteps,
@@ -348,7 +349,7 @@ const tools = {
         for (const node of detail.nodes) {
           if (node.status === 'Đã xong' || node.status === 'Bỏ qua') continue;
           if (dq && norm(node.dept) !== dq) continue;
-          if (pq && !norm(node.pic).includes(pq)) continue;
+          if (pq && !toPicArray(node.pic).some((p) => norm(p).includes(pq))) continue;
           const due = dates[node.node_id]?.due;
           if (!due) continue;
           const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
@@ -623,7 +624,8 @@ const tools = {
           notes: { type: 'STRING', description: 'ghi chú' },
           pic: {
             type: 'STRING',
-            description: 'gán/đổi người phụ trách (PIC) — chỉ trưởng phòng/quản lý nên dùng',
+            description:
+              'gán/ĐỔI LẠI danh sách người phụ trách (PIC) của bước. Nhiều người thì ngăn cách dấu phẩy (vd "An, Bình") — tất cả phải CÙNG PHÒNG với bước. Chỉ trưởng phòng/quản lý nên dùng.',
           },
         },
         required: ['query', 'node_code'],
@@ -643,14 +645,14 @@ const tools = {
       const node = await getProjectNode(match.id, nodeCode);
       if (!node) return { error: `Dự án ${match.code} không có bước ${nodeCode}.` };
 
-      const owner = (node.pic || '').trim();
+      const owners = toPicArray(node.pic);
       const nodeDept = (node.dept || '').trim();
       const isLeaderOfDept =
         Array.isArray(ctx.leadDepts) && nodeDept && ctx.leadDepts.includes(nodeDept);
-      const isOwner = owner && owner === (ctx.picName || '').trim();
+      const isOwner = owners.includes((ctx.picName || '').trim());
       if (!isLeaderOfDept && !isOwner) {
         return {
-          error: `Bước ${nodeCode} do "${owner || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ sửa được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
+          error: `Bước ${nodeCode} do "${picText(node.pic) || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ sửa được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
         };
       }
 
@@ -672,27 +674,36 @@ const tools = {
       // Số ngày (duration), Phòng (dept), Sau bước (after): chỉ cấp quản lý (nhập mã
       // trên web) mới sửa — chatbot chỉ xác thực PIC nên không cho sửa các trường này.
       if (args.pic !== undefined) {
-        const newPic = String(args.pic || '').trim();
-        if (isLeaderOfDept) {
-          // Trưởng phòng: gán cho ai cũng được. Chuẩn hoá tên về đúng danh bạ
-          // ("Ly" -> "Phạm Khánh Ly") để khớp nhắc việc; ngoài danh bạ giữ nguyên.
-          const canon = await findMemberByName(newPic);
-          payload.pic = canon ? canon.pic_name : newPic;
-        } else {
-          // PIC thường (chủ bước): chỉ được CHUYỂN bước cho PIC khác CÙNG PHÒNG với bước.
-          if (!newPic) return { error: 'Tên PIC mới đang trống.' };
-          const target = await findMemberByName(newPic);
-          if (!target) {
-            return { error: `Không tìm thấy PIC "${newPic}" trong danh bạ.` };
+        // Chatbot gán 'pic' -> GÁN LẠI danh sách PIC (text[]). Cho phép nhiều tên
+        // ngăn cách dấu phẩy; tất cả phải CÙNG PHÒNG với bước.
+        const names = String(args.pic || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (!names.length) return { error: 'Tên PIC mới đang trống.' };
+        const cleaned = [];
+        for (const newPic of names) {
+          if (isLeaderOfDept) {
+            // Trưởng phòng: gán cho ai cũng được. Chuẩn hoá tên về đúng danh bạ
+            // ("Ly" -> "Phạm Khánh Ly") để khớp nhắc việc; ngoài danh bạ giữ nguyên.
+            const canon = await findMemberByName(newPic);
+            cleaned.push(canon ? canon.pic_name : newPic);
+          } else {
+            // PIC thường (chủ bước): chỉ được gán PIC khác CÙNG PHÒNG với bước.
+            const target = await findMemberByName(newPic);
+            if (!target) {
+              return { error: `Không tìm thấy PIC "${newPic}" trong danh bạ.` };
+            }
+            const targetDept = (target.dept || '').trim();
+            if (!nodeDept || targetDept !== nodeDept) {
+              return {
+                error: `Chỉ được gán PIC cùng phòng ${nodeDept || '—'}. "${target.pic_name}" thuộc phòng ${targetDept || '—'}.`,
+              };
+            }
+            cleaned.push(target.pic_name); // dùng tên chuẩn trong danh bạ
           }
-          const targetDept = (target.dept || '').trim();
-          if (!nodeDept || targetDept !== nodeDept) {
-            return {
-              error: `Chỉ được chuyển cho PIC cùng phòng ${nodeDept || '—'}. "${target.pic_name}" thuộc phòng ${targetDept || '—'}.`,
-            };
-          }
-          payload.pic = target.pic_name; // dùng tên chuẩn trong danh bạ
         }
+        payload.pic = cleaned;
       }
       // Điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong' (khớp web).
       if (payload.actual_date && payload.status === undefined) {
@@ -792,15 +803,15 @@ const tools = {
       const node = await getProjectNode(match.id, nodeCode);
       if (!node) return { error: `Dự án ${match.code} không có bước ${nodeCode}.` };
 
-      // Phân quyền GIỐNG update_node: chủ bước (pic = tên mình) hoặc trưởng phòng của bước.
-      const owner = (node.pic || '').trim();
+      // Phân quyền GIỐNG update_node: chủ bước (tên mình trong PIC) hoặc trưởng phòng của bước.
+      const owners = toPicArray(node.pic);
       const nodeDept = (node.dept || '').trim();
       const isLeaderOfDept =
         Array.isArray(ctx.leadDepts) && nodeDept && ctx.leadDepts.includes(nodeDept);
-      const isOwner = owner && owner === (ctx.picName || '').trim();
+      const isOwner = owners.includes((ctx.picName || '').trim());
       if (!isLeaderOfDept && !isOwner) {
         return {
-          error: `Bước ${nodeCode} do "${owner || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ ghi chú được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
+          error: `Bước ${nodeCode} do "${picText(node.pic) || 'chưa gán'}" (phòng ${nodeDept || '—'}) phụ trách. Bạn chỉ ghi chú được bước của mình hoặc bước thuộc phòng bạn quản lý.`,
         };
       }
 

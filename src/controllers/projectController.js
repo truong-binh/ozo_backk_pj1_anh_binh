@@ -14,6 +14,7 @@ const {
       seedFromPayload,
 } = require("../services/projectService");
 const { findMemberByName } = require("../services/picMembersService");
+const { toPicArray } = require("../utils/pic");
 const {
       notifyAssignment,
       notifyNewProjectAssignments,
@@ -87,8 +88,12 @@ async function patchProjectNode(req, res) {
       const payload = req.body || {};
 
       const { role, picName, leadDepts } = req.user || {};
+      // PIC là MẢNG. Chuẩn hoá payload.pic về mảng ngay (web gửi mảng; chatbot/
+      // dữ liệu cũ có thể gửi chuỗi) để mọi xử lý bên dưới đồng nhất.
+      if (payload.pic !== undefined) payload.pic = toPicArray(payload.pic);
+
       // Quản lý sửa mọi bước. Trưởng phòng sửa mọi bước thuộc phòng mình quản lý.
-      // PIC thường chỉ sửa bước có pic = tên mình. Viewer: cấm.
+      // PIC thường chỉ sửa bước có tên mình trong danh sách PIC. Viewer: cấm.
       if (role !== "manager") {
             if (role !== "PIC") {
                   return res
@@ -103,11 +108,11 @@ async function patchProjectNode(req, res) {
             if (!node) {
                   return res.status(404).json({ error: "Không tìm thấy bước" });
             }
-            const owner = (node.pic || "").trim();
+            const owners = toPicArray(node.pic);
             const nodeDept = (node.dept || "").trim();
             const isLeaderOfDept =
                   Array.isArray(leadDepts) && nodeDept && leadDepts.includes(nodeDept);
-            const isOwner = owner && owner === (picName || "").trim();
+            const isOwner = owners.includes((picName || "").trim());
             if (!isLeaderOfDept && !isOwner) {
                   return res.status(403).json({
                         error:
@@ -115,37 +120,51 @@ async function patchProjectNode(req, res) {
                   });
             }
 
-            // PIC-chủ-bước (không phải trưởng phòng) muốn ĐỔI PIC -> chỉ được
-            // chuyển cho người CÙNG PHÒNG với bước.
+            // PIC-chủ-bước (không phải trưởng phòng) muốn ĐỔI danh sách PIC -> mọi
+            // người MỚI phải CÙNG PHÒNG với bước (người đã có sẵn thì giữ nguyên).
             if (payload.pic !== undefined && !isLeaderOfDept) {
-                  const newPic = String(payload.pic || "").trim();
-                  if (newPic && newPic !== owner) {
-                        const target = await findMemberByName(newPic);
+                  const cleaned = [];
+                  for (const name of payload.pic) {
+                        if (owners.includes(name)) {
+                              cleaned.push(name);
+                              continue;
+                        }
+                        const target = await findMemberByName(name);
                         if (!target) {
                               return res.status(400).json({
-                                    error: `Không tìm thấy PIC "${newPic}" trong danh bạ.`,
+                                    error: `Không tìm thấy PIC "${name}" trong danh bạ.`,
                               });
                         }
                         const targetDept = (target.dept || "").trim();
                         if (!nodeDept || targetDept !== nodeDept) {
                               return res.status(403).json({
-                                    error: `Chỉ được chuyển cho PIC cùng phòng ${nodeDept || "—"}. "${target.pic_name}" thuộc phòng ${targetDept || "—"}.`,
+                                    error: `Chỉ được thêm PIC cùng phòng ${nodeDept || "—"}. "${target.pic_name}" thuộc phòng ${targetDept || "—"}.`,
                               });
                         }
-                        payload.pic = target.pic_name; // chuẩn hoá tên theo danh bạ
+                        cleaned.push(target.pic_name); // chuẩn hoá tên theo danh bạ
                   }
+                  payload.pic = cleaned;
             }
       }
 
-      // Chuẩn hoá tên PIC về đúng danh bạ (vd "Ly" -> "Phạm Khánh Ly") để khớp
-      // nhắc việc/báo cáo. Không tìm thấy -> giữ nguyên (cho phép người ngoài danh bạ).
-      // Nhãn vai trò "Trưởng phòng ..." giữ nguyên, không dò danh bạ.
-      if (payload.pic !== undefined && String(payload.pic).trim()) {
-            const raw = String(payload.pic).trim();
-            if (!raw.startsWith("Trưởng phòng ")) {
-                  const canon = await findMemberByName(raw);
-                  if (canon) payload.pic = canon.pic_name;
+      // Chuẩn hoá từng tên PIC về đúng danh bạ (vd "Ly" -> "Phạm Khánh Ly") để
+      // khớp nhắc việc/báo cáo, loại trùng. Không tìm thấy -> giữ nguyên (cho phép
+      // người ngoài danh bạ). Nhãn vai trò "Trưởng phòng ..." giữ nguyên.
+      if (payload.pic !== undefined) {
+            const out = [];
+            const seen = new Set();
+            for (const raw of payload.pic) {
+                  let name = raw;
+                  if (!raw.startsWith("Trưởng phòng ")) {
+                        const canon = await findMemberByName(raw);
+                        if (canon) name = canon.pic_name;
+                  }
+                  const key = name.toLowerCase();
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+                  out.push(name);
             }
+            payload.pic = out;
       }
 
       // Tự động: điền NGÀY THỰC TẾ mà không nêu trạng thái -> coi như 'Đã xong'.

@@ -30,7 +30,7 @@ CREATE TABLE public.project_nodes (
   project_id bigint NOT NULL,
   node_id text NOT NULL,
   status text NOT NULL DEFAULT 'Chưa làm'::text,
-  pic text,
+  pic text[] DEFAULT '{}'::text[],
   duration integer NOT NULL,
   actual_date date,
   notes text,

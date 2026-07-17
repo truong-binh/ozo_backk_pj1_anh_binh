@@ -7,6 +7,7 @@ const { computeAllDates } = require('../../utils/datePlanner');
 const { sendText, listChats } = require('../lark/larkClient');
 const { getSupabaseClient } = require('../../config/supabaseClient');
 const { isLeaderLabel } = require('../picMembersService');
+const { picText } = require('../../utils/pic');
 const { larkReportChatId, appUrl } = require('../../config/env');
 
 const TZ = 'Asia/Ho_Chi_Minh';
@@ -53,9 +54,10 @@ function fmtDMY(y, m, d) {
 //  - nhãn vai trò ("Trưởng phòng X") -> giữ nguyên (đã có tên phòng)
 //  - chưa gán   -> "chưa gán - Phòng" (biết phòng nào cần phân), hoặc "chưa gán"
 function picLabel(node) {
-  const name = node.pic && String(node.pic).trim();
+  const name = picText(node.pic);
   const dept = node.dept && String(node.dept).trim();
   if (!name) return dept ? `chưa gán - ${dept}` : 'chưa gán';
+  // Nhiều PIC cùng phòng -> "A, B - Phòng". Nhãn vai trò giữ nguyên.
   if (isLeaderLabel(name)) return name;
   return dept ? `${name} - ${dept}` : name;
 }

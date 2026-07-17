@@ -15,6 +15,7 @@ const { computeAllDates, isoLocal } = require('../../utils/datePlanner');
 const { sendTextByEmail, sendTextByOpenId, isLarkConfigured } = require('../lark/larkClient');
 const { remindersEnabled, stepDoneWatcherOpenIds, appUrl } = require('../../config/env');
 const { getDeptLeaderMap, isLeaderLabel, deptFromLeaderLabel } = require('../picMembersService');
+const { toPicArray, picText } = require('../../utils/pic');
 
 const TZ = 'Asia/Ho_Chi_Minh';
 const DONE = new Set(['Đã xong', 'Bỏ qua']);
@@ -107,7 +108,8 @@ async function computeReminderItems() {
   for (const { project, nodes } of projects) {
     const dates = computeAllDates({ project, nodes });
     for (const node of nodes) {
-      if (!node.pic || !String(node.pic).trim()) continue;
+      const pics = toPicArray(node.pic);
+      if (!pics.length) continue;
       if (DONE.has(node.status)) continue;
 
       const due = dates[node.node_id]?.due;
@@ -119,25 +121,25 @@ async function computeReminderItems() {
       const dueUtc = Date.UTC(dy, dm - 1, dd);
       const dueIso = `${dy}-${String(dm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
       const diffDays = Math.round((dueUtc - today.utc) / 86400000);
+      const dueLabel = fmtDMY(dy, dm, dd);
 
-      const base = {
-        project,
-        node,
-        pic: node.pic,
-        dueLabel: fmtDMY(dy, dm, dd),
-      };
+      // Nhiều PIC/1 bước -> mỗi người 1 item riêng. dedup_key kèm norm(pic) để
+      // mỗi người được nhắc độc lập (không đè nhau ở bảng sent_reminders).
+      for (const pic of pics) {
+        const base = { project, node, pic, dueLabel };
 
-      // Việc mới giao (assigned) KHÔNG quét ở đây nữa — đã chuyển sang gửi ngay
-      // khi phân PIC qua notifyAssignment(). Vòng quét chỉ lo due_soon/overdue.
+        // Việc mới giao (assigned) KHÔNG quét ở đây nữa — đã chuyển sang gửi ngay
+        // khi phân PIC qua notifyAssignment(). Vòng quét chỉ lo due_soon/overdue.
 
-      // Trước hạn ~24h: hạn rơi đúng vào ngày mai.
-      if (diffDays === 1) {
-        items.push({ ...base, kind: 'due_soon', dedup_key: dueIso });
-      }
+        // Trước hạn ~24h: hạn rơi đúng vào ngày mai.
+        if (diffDays === 1) {
+          items.push({ ...base, kind: 'due_soon', dedup_key: `${dueIso}|${norm(pic)}` });
+        }
 
-      // Quá hạn: nhắc mỗi ngày (dedup theo ngày hôm nay).
-      if (diffDays < 0) {
-        items.push({ ...base, kind: 'overdue', dedup_key: today.iso, lateDays: -diffDays });
+        // Quá hạn: nhắc mỗi ngày (dedup theo ngày hôm nay + người).
+        if (diffDays < 0) {
+          items.push({ ...base, kind: 'overdue', dedup_key: `${today.iso}|${norm(pic)}`, lateDays: -diffDays });
+        }
       }
     }
   }
@@ -332,56 +334,53 @@ async function notifyAssignment(projectId, nodeId) {
   const { project, nodes } = await getProjectDetail(projectId);
   const node = (nodes || []).find((n) => n.node_id === nodeId);
   if (!node) return { ok: false, reason: 'not_found' };
-  if (!node.pic || !String(node.pic).trim()) return { ok: false, reason: 'no_pic' };
+  const pics = toPicArray(node.pic);
+  if (!pics.length) return { ok: false, reason: 'no_pic' };
   if (DONE.has(node.status)) return { ok: false, reason: 'done' };
 
-  // PIC là nhãn vai trò ("Trưởng phòng ...") hoặc người ngoài danh bạ -> không có
-  // liên hệ -> bỏ qua, không phải lỗi.
+  // Mỗi PIC (có liên hệ, không phải nhãn vai trò/người ngoài danh bạ) -> 1 tin.
   const contactMap = await loadPicContactMap();
-  const contact = contactMap.get(norm(node.pic));
-  if (!contact || (!contact.open_id && !contact.email)) {
-    return { ok: false, reason: 'no_contact', pic: node.pic };
-  }
-
-  const dedup_key = norm(node.pic);
-
-  // Đã gửi cho đúng PIC này ở bước này rồi thì thôi. Nếu bảng chưa tồn tại thì
-  // cứ gửi (bỏ dedupe) — thà gửi hơn im lặng.
-  const supabase = getSupabaseClient();
-  try {
-    const { data: seen } = await supabase
-      .from('sent_reminders')
-      .select('project_id')
-      .eq('project_id', projectId)
-      .eq('node_id', nodeId)
-      .eq('kind', 'assigned')
-      .eq('dedup_key', dedup_key)
-      .maybeSingle();
-    if (seen) return { ok: false, reason: 'already_sent' };
-  } catch (_e) {
-    // bỏ qua lỗi đọc bảng -> gửi luôn
-  }
-
   const dates = computeAllDates({ project, nodes });
   const due = dates[node.node_id]?.due;
   const dueLabel = due
     ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate())
     : '—';
 
-  const item = {
-    project, node, pic: node.pic, dueLabel, kind: 'assigned', dedup_key,
-    email: contact.email || null,
-  };
-  const res = await sendToContact(contact, composeMessage([item]));
-  if (res && res.code === 0) {
+  const items = [];
+  for (const pic of pics) {
+    const contact = contactMap.get(norm(pic));
+    if (!contact || (!contact.open_id && !contact.email)) continue;
+    items.push({
+      project, node, pic, dueLabel, kind: 'assigned', dedup_key: norm(pic),
+      contact, email: contact.email || null,
+    });
+  }
+  if (!items.length) return { ok: false, reason: 'no_contact', pics };
+
+  // Bỏ các PIC đã báo trước đó ở bước này (nếu bảng tồn tại).
+  let remaining = items;
+  try {
+    const filtered = await filterUnsent(items);
+    remaining = filtered.remaining;
+  } catch (err) {
+    if (err.code !== 'NO_TABLE') throw err;
+  }
+  if (!remaining.length) return { ok: false, reason: 'already_sent' };
+
+  const sentItems = [];
+  for (const it of remaining) {
+    const res = await sendToContact(it.contact, composeMessage([it]));
+    if (res && res.code === 0) sentItems.push(it);
+  }
+  if (sentItems.length) {
     try {
-      await recordSent([item]);
+      await recordSent(sentItems);
     } catch (_e) {
       // gửi được là chính; ghi dedupe lỗi (vd chưa có bảng) thì bỏ qua.
     }
-    return { ok: true, sent: 1, via: contact.open_id ? 'open_id' : 'email' };
+    return { ok: true, sent: sentItems.length };
   }
-  return { ok: false, reason: 'send_failed', err: res?.msg };
+  return { ok: false, reason: 'send_failed' };
 }
 
 // Gửi TIN GIAO VIỆC khi vừa TẠO DỰ ÁN mới: gom theo người nhận -> 1 tin tóm tắt/
@@ -399,21 +398,23 @@ async function notifyNewProjectAssignments(projectId) {
 
   const items = [];
   for (const node of nodes) {
-    if (!node.pic || !String(node.pic).trim()) continue;
     if (DONE.has(node.status)) continue;
-    const contact = resolveAssignContact(node.pic, contactMap, leaderMap);
-    if (!contact) continue;
     const due = dates[node.node_id]?.due;
-    items.push({
-      project,
-      node,
-      pic: node.pic,
-      dueLabel: due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—',
-      kind: 'assigned',
-      dedup_key: norm(node.pic),
-      contact,
-      email: contact.email || null,
-    });
+    const dueLabel = due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—';
+    for (const pic of toPicArray(node.pic)) {
+      const contact = resolveAssignContact(pic, contactMap, leaderMap);
+      if (!contact) continue;
+      items.push({
+        project,
+        node,
+        pic,
+        dueLabel,
+        kind: 'assigned',
+        dedup_key: norm(pic),
+        contact,
+        email: contact.email || null,
+      });
+    }
   }
   if (!items.length) return { ok: true, sent: 0, note: 'no_contact_pic' };
 
@@ -493,13 +494,13 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
       if (!contact || !(contact.open_id || contact.email)) return;
       recipByKey.set(contact.open_id || contact.email, contact);
     };
-    if (node.pic && String(node.pic).trim()) {
-      addRecip(resolveAssignContact(node.pic, contactMap, leaderMap));
+    for (const pic of toPicArray(node.pic)) {
+      addRecip(resolveAssignContact(pic, contactMap, leaderMap));
     }
 
     for (const [key, contact] of recipByKey) {
       items.push({
-        project, node, pic: node.pic || '',
+        project, node, pic: picText(node.pic),
         dueLabel, kind: 'started', dedup_key: norm(key),
         contact, email: contact.email || null,
       });
@@ -602,7 +603,8 @@ async function notifyDueDateChanges(projectId, before) {
   const items = [];
   for (const node of nodes || []) {
     if (DONE.has(node.status)) continue;
-    if (!node.pic || !String(node.pic).trim()) continue;
+    const pics = toPicArray(node.pic);
+    if (!pics.length) continue;
 
     const due = dates[node.node_id]?.due;
     if (!due) continue;
@@ -610,18 +612,19 @@ async function notifyDueDateChanges(projectId, before) {
     const oldIso = before[node.node_id];
     if (!oldIso || oldIso === newIso) continue; // bước mới, hoặc không dời
 
-    const contact = resolveAssignContact(node.pic, contactMap, leaderMap);
-    if (!contact) continue;
-
-    items.push({
-      project, node, pic: node.pic,
-      oldLabel: fmtIso(oldIso),
-      dueLabel: fmtDate(due),
-      kind: 'date_changed',
-      dedup_key: `${oldIso}>${newIso}`,
-      contact,
-      email: contact.email || null,
-    });
+    for (const pic of pics) {
+      const contact = resolveAssignContact(pic, contactMap, leaderMap);
+      if (!contact) continue;
+      items.push({
+        project, node, pic,
+        oldLabel: fmtIso(oldIso),
+        dueLabel: fmtDate(due),
+        kind: 'date_changed',
+        dedup_key: `${oldIso}>${newIso}|${norm(pic)}`,
+        contact,
+        email: contact.email || null,
+      });
+    }
   }
   if (!items.length) return { ok: true, sent: 0, note: 'no_change' };
 
@@ -707,7 +710,7 @@ async function notifyStepCompleted(projectId, nodeId, statusLabel) {
   if (!recipients.length) return { ok: false, reason: 'no_recipient', dept };
 
   const items = recipients.map((contact) => ({
-    project, node, pic: node.pic || '',
+    project, node, pic: picText(node.pic),
     dueLabel: '—', kind: 'completed',
     dedup_key: norm(contact.open_id || contact.email),
     contact, email: contact.email || null,
@@ -723,7 +726,7 @@ async function notifyStepCompleted(projectId, nodeId, statusLabel) {
   }
   if (!remaining.length) return { ok: true, sent: 0, note: 'already_sent' };
 
-  const text = composeCompletedMessage(project, node, statusLabel, node.pic);
+  const text = composeCompletedMessage(project, node, statusLabel, picText(node.pic));
   const sent = [];
   const failed = [];
   for (const it of remaining) {

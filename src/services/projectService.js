@@ -3,6 +3,7 @@ const path = require('node:path');
 const { getSupabaseClient } = require('../config/supabaseClient');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../constants/workflowNodes');
 const { leaderLabel } = require('./picMembersService');
+const { toPicArray } = require('../utils/pic');
 const { computeAllDates, isoLocal } = require('../utils/datePlanner');
 
 // Baseline "ngày dự kiến": tính kế hoạch gốc từ start_date + duration + after,
@@ -308,7 +309,8 @@ async function createProject(payload) {
     project_id: project.id,
     node_id: n.code,
     status: 'Chưa làm',
-    pic: leaderLabel(n.dept),
+    // PIC là MẢNG (text[]). Mặc định = [nhãn trưởng phòng] nếu bước có phòng.
+    pic: n.dept ? [leaderLabel(n.dept)] : [],
     duration: n.default_duration,
     actual_date: null,
     notes: '',
@@ -372,7 +374,7 @@ async function upsertProjectFromJsonRow(projectJson) {
       project_id: project.id,
       node_id: nodeId,
       status: nodeData.status || 'Chua lam',
-      pic: nodeData.pic || '',
+      pic: toPicArray(nodeData.pic),
       duration:
         typeof nodeData.duration === 'number'
           ? nodeData.duration
