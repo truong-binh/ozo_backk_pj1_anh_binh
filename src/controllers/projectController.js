@@ -3,6 +3,7 @@ const {
       listProjectsWithNodes,
       getProjectDetail,
       createProject,
+      copyProject,
       updateProject,
       deleteProject,
       getProjectNode,
@@ -67,6 +68,28 @@ async function postProject(req, res) {
       );
 
       res.status(201).json(created);
+}
+
+async function copyProjectController(req, res) {
+      const sourceId = Number(req.params.projectId);
+      const code = String(req.body?.code || "").trim();
+      const name = String(req.body?.name || "").trim();
+      if (!code || !name) {
+            return res
+                  .status(400)
+                  .json({ error: "Mã và tên dự án mới là bắt buộc" });
+      }
+      try {
+            const created = await copyProject(sourceId, { code, name });
+            return res.status(201).json(created);
+      } catch (e) {
+            if (/duplicate|unique/i.test(e.message || "")) {
+                  return res
+                        .status(409)
+                        .json({ error: `Mã dự án "${code}" đã tồn tại.` });
+            }
+            throw e;
+      }
 }
 
 async function patchProject(req, res) {
@@ -256,6 +279,7 @@ module.exports = {
       getProjectsWithNodes,
       getProjectById,
       postProject,
+      copyProjectController,
       patchProject,
       removeProject,
       patchProjectNode,

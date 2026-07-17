@@ -329,6 +329,49 @@ async function createProject(payload) {
   return project;
 }
 
+// Nhân bản 1 dự án: tạo dự án mới (mã + tên mới) và COPY TOÀN BỘ các bước của
+// dự án nguồn — giữ nguyên PIC, số ngày, trạng thái, ngày thực tế, phòng, sau
+// bước, ghi chú, đính kèm, mốc ngày dự kiến. Trả về dự án mới.
+async function copyProject(sourceProjectId, { code, name }) {
+  const supabase = getSupabaseClient();
+  const { project, nodes } = await getProjectDetail(sourceProjectId);
+  if (!project) throw new Error('Không tìm thấy dự án nguồn');
+
+  const { data: created, error: pErr } = await supabase
+    .from('projects')
+    .insert([
+      {
+        code,
+        name,
+        type: project.type,
+        category: project.category || null,
+        product_group: project.product_group || null,
+        owner: project.owner || null,
+        start_date: project.start_date,
+      },
+    ])
+    .select('*')
+    .single();
+  if (pErr) throw pErr;
+
+  const rows = (nodes || []).map((n) => ({
+    project_id: created.id,
+    node_id: n.node_id,
+    status: n.status,
+    pic: toPicArray(n.pic),
+    duration: n.duration,
+    actual_date: n.actual_date || null,
+    notes: n.notes || '',
+    dept: n.dept || null,
+    after: Array.isArray(n.after) ? n.after : [],
+    attachments: Array.isArray(n.attachments) ? n.attachments : [],
+    planned_date: n.planned_date || null,
+  }));
+  if (rows.length) await writeNodes(supabase, rows);
+
+  return created;
+}
+
 async function updateProject(projectId, payload) {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
@@ -425,6 +468,7 @@ module.exports = {
   listProjectsWithNodes,
   getProjectDetail,
   createProject,
+  copyProject,
   updateProject,
   deleteProject,
   getProjectNode,

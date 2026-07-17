@@ -6,6 +6,7 @@ const {
       getProjectsWithNodes,
       getProjectById,
       postProject,
+      copyProjectController,
       patchProject,
       removeProject,
       patchProjectNode,
@@ -22,6 +23,8 @@ router.get("/with-nodes", asyncHandler(getProjectsWithNodes));
 // Thông tin dự án + seed: chỉ Quản lý.
 router.post("/seed/from-payload", requireManager, asyncHandler(seedProjectsFromPayload));
 router.post("/", requireManager, asyncHandler(postProject));
+// Nhân bản dự án (mã + tên mới, copy toàn bộ bước) — chỉ Quản lý.
+router.post("/:projectId/copy", requireManager, asyncHandler(copyProjectController));
 router.patch("/:projectId", requireManager, asyncHandler(patchProject));
 router.delete("/:projectId", requireManager, asyncHandler(removeProject));
 
