@@ -19,12 +19,17 @@ if (isCloudinaryConfigured) {
 }
 
 // Upload buffer lên Cloudinary, trả về URL công khai (secure_url).
-function uploadBuffer(buffer, filename) {
+// resource_type: ẢNH -> 'image' (xem/preview được); MỌI FILE KHÁC -> 'raw'.
+// KHÔNG dùng 'auto': Cloudinary xếp PDF vào 'image', mà tài khoản mặc định BẬT
+// luật chặn phát PDF/ZIP (Settings > Security) -> link trả HTTP 401. Đường 'raw'
+// không dính luật đó nên PDF/Word/Excel tải về bình thường.
+function uploadBuffer(buffer, filename, mimetype) {
+  const isImage = String(mimetype || '').startsWith('image/');
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         folder: 'feelex-attachments',
-        resource_type: 'auto', // nhận ảnh, pdf, file khác
+        resource_type: isImage ? 'image' : 'raw',
         use_filename: true,
         unique_filename: true,
         filename_override: filename || undefined,

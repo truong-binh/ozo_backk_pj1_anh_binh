@@ -24,6 +24,32 @@ function uploadSingle(req, res, next) {
   });
 }
 
+// Tên file trong multipart bị busboy đọc theo latin1 -> tên tiếng Việt hiện sai
+// (mojibake). Thấy dấu hiệu đó thì giải mã lại sang UTF-8, rồi chuẩn hoá NFC để
+// hiển thị đúng ("Học phần...").
+const MOJIBAKE = /[\u00C0-\u00FF][\u0080-\u00BF]/;
+function displayName(raw) {
+  let name = String(raw || 'file');
+  if (MOJIBAKE.test(name)) {
+    const decoded = Buffer.from(name, 'latin1').toString('utf8');
+    if (!decoded.includes('�')) name = decoded;
+  }
+  return name.normalize('NFC');
+}
+
+// public_id trên Cloudinary: bỏ dấu & ký tự lạ để URL sạch, không vỡ khi tải về.
+function asciiName(name) {
+  return (
+    name
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .replace(/[^\w.\- ]+/g, '_')
+      .trim() || 'file'
+  );
+}
+
 const router = express.Router();
 
 router.post(
@@ -40,8 +66,9 @@ router.post(
       return res.status(400).json({ error: 'Thiếu file tải lên' });
     }
 
-    const result = await uploadBuffer(req.file.buffer, req.file.originalname);
-    res.json({ name: req.file.originalname, url: result.secure_url });
+    const name = displayName(req.file.originalname);
+    const result = await uploadBuffer(req.file.buffer, asciiName(name), req.file.mimetype);
+    res.json({ name, url: result.secure_url });
   }),
 );
 
