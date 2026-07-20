@@ -3,16 +3,32 @@ const multer = require('multer');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { isCloudinaryConfigured, uploadBuffer } = require('../config/cloudinary');
 
+const MAX_UPLOAD_MB = 25;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // tối đa 25MB / file
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 }, // tối đa 25MB / file
 });
+
+// Nhận mọi loại file (ảnh, PDF, Word, Excel…) nhưng đổi lỗi multer thành thông
+// báo tiếng Việt rõ ràng thay vì 500 "File too large".
+function uploadSingle(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res
+        .status(413)
+        .json({ error: `File quá nặng — tối đa ${MAX_UPLOAD_MB}MB mỗi file.` });
+    }
+    return res.status(400).json({ error: err.message || 'Không đọc được file tải lên' });
+  });
+}
 
 const router = express.Router();
 
 router.post(
   '/',
-  upload.single('file'),
+  uploadSingle,
   asyncHandler(async (req, res) => {
     if (req.user?.role === 'viewer') {
       return res.status(403).json({ error: 'Bạn không có quyền tải file' });

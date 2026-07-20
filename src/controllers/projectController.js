@@ -16,6 +16,7 @@ const {
 } = require("../services/projectService");
 const { findMemberByName } = require("../services/picMembersService");
 const { toPicArray } = require("../utils/pic");
+const { todayIsoVN } = require("../utils/datePlanner");
 const {
       notifyAssignment,
       notifyNewProjectAssignments,
@@ -115,6 +116,13 @@ async function patchProjectNode(req, res) {
       // dữ liệu cũ có thể gửi chuỗi) để mọi xử lý bên dưới đồng nhất.
       if (payload.pic !== undefined) payload.pic = toPicArray(payload.pic);
 
+      // Bước TRƯỚC khi sửa: dùng cho phân quyền, tự điền ngày thực tế, và biết
+      // trạng thái có thực sự đổi hay không (đọc 1 lần, dùng lại bên dưới).
+      const node = await getProjectNode(projectId, nodeId);
+      if (!node) {
+            return res.status(404).json({ error: "Không tìm thấy bước" });
+      }
+
       // Quản lý sửa mọi bước. Trưởng phòng sửa mọi bước thuộc phòng mình quản lý.
       // PIC thường chỉ sửa bước có tên mình trong danh sách PIC. Viewer: cấm.
       if (role !== "manager") {
@@ -127,10 +135,6 @@ async function patchProjectNode(req, res) {
             // Loại khỏi payload (thay vì chặn cả request) để không phá luồng đổi PIC.
             // PIC chỉ chuyển trong cùng phòng nên 'dept' của bước không cần đổi.
             for (const f of ["dept", "duration", "after"]) delete payload[f];
-            const node = await getProjectNode(projectId, nodeId);
-            if (!node) {
-                  return res.status(404).json({ error: "Không tìm thấy bước" });
-            }
             const owners = toPicArray(node.pic);
             const nodeDept = (node.dept || "").trim();
             const isLeaderOfDept =
@@ -141,6 +145,42 @@ async function patchProjectNode(req, res) {
                         error:
                               "Bạn chỉ được sửa bước của mình hoặc bước thuộc phòng bạn quản lý",
                   });
+            }
+
+            // NGÀY THỰC TẾ: PIC thường không bao giờ tự chọn — bấm 'Đã xong' thì
+            // hệ thống tự điền ngày hôm nay (xem khối tự điền bên dưới). Trưởng
+            // phòng của bước & quản lý vẫn sửa tay được để chỉnh sai sót.
+            if (!isLeaderOfDept) delete payload.actual_date;
+
+            // Bước đã 'Đã xong'/'Bỏ qua': PIC thường hết quyền sửa Ghi chú / Đính
+            // kèm (chốt hồ sơ sau khi hoàn tất). Trưởng phòng của bước & quản lý
+            // vẫn sửa được. Gửi lại y nguyên giá trị cũ thì bỏ qua im lặng (form
+            // gửi kèm cả trường không đổi); mở lại bước trong cùng lần sửa thì
+            // cho phép luôn.
+            const LOCK_AFTER_DONE = ["notes", "attachments"];
+            const nodeDone = ["Đã xong", "Bỏ qua"].includes(node.status);
+            const reopening =
+                  payload.status !== undefined &&
+                  !["Đã xong", "Bỏ qua"].includes(payload.status);
+            if (nodeDone && !isLeaderOfDept && !reopening) {
+                  // Rỗng dưới mọi dạng (null / '' / []) coi như bằng nhau.
+                  const norm = (v) =>
+                        v === undefined || v === null || v === "" ||
+                        (Array.isArray(v) && v.length === 0)
+                              ? null
+                              : v;
+                  const same = (a, b) =>
+                        JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+                  const changed = LOCK_AFTER_DONE.filter(
+                        (f) => payload[f] !== undefined && !same(payload[f], node[f]),
+                  );
+                  if (changed.length) {
+                        return res.status(403).json({
+                              error:
+                                    "Bước đã kết thúc — bạn không sửa được Ghi chú / Đính kèm nữa. Nhờ trưởng phòng, hoặc mở lại bước trước khi sửa.",
+                        });
+                  }
+                  for (const f of LOCK_AFTER_DONE) delete payload[f];
             }
 
             // PIC-chủ-bước (không phải trưởng phòng) muốn ĐỔI danh sách PIC -> mọi
@@ -195,6 +235,29 @@ async function patchProjectNode(req, res) {
             payload.status = "Đã xong";
       }
 
+      // Ngược lại: bấm 'Đã xong' mà chưa có ngày thực tế -> tự điền HÔM NAY (giờ
+      // VN). Đây là đường duy nhất PIC ghi ngày thực tế, vì ô ngày đã bị khoá.
+      if (
+            payload.status === "Đã xong" &&
+            payload.actual_date === undefined &&
+            !node.actual_date
+      ) {
+            payload.actual_date = todayIsoVN();
+      }
+
+      // MỞ LẠI bước đã xong (đổi sang trạng thái khác) mà không nêu ngày -> xoá
+      // ngày thực tế cũ, để lần hoàn tất sau đóng dấu đúng ngày mới. (Cùng cách
+      // xử lý với revertDependentsToNotStarted cho các bước phía sau.)
+      if (
+            payload.status !== undefined &&
+            payload.status !== "Đã xong" &&
+            node.status === "Đã xong" &&
+            payload.actual_date === undefined &&
+            node.actual_date
+      ) {
+            payload.actual_date = null;
+      }
+
       // Chặn tích 'Đã xong' khi bước phụ thuộc (after) chưa 'Đã xong'/'Bỏ qua'.
       if (payload.status === "Đã xong") {
             const pending = await getUnsatisfiedDeps(projectId, nodeId);
@@ -219,10 +282,17 @@ async function patchProjectNode(req, res) {
             ? await snapshotDueDates(projectId)
             : null;
 
+      // Trạng thái có THỰC SỰ đổi trong lần sửa này không? Form sửa bước luôn gửi
+      // kèm status dù người dùng chỉ thêm ghi chú/đính kèm, nên phải so với giá trị
+      // cũ — nếu không, mỗi lần thêm ảnh vào bước đã xong lại chạy nhánh "vừa hoàn
+      // tất" (chỉ nhờ dedupe sent_reminders mới không bắn tin trùng).
+      const statusChanged =
+            payload.status !== undefined && payload.status !== node.status;
+
       const data = await updateProjectNode(projectId, nodeId, payload);
 
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> mở khoá các bước kế tiếp đủ điều kiện sang 'Đang làm'.
-      if (data.status === "Đã xong" || data.status === "Bỏ qua") {
+      if (statusChanged && (data.status === "Đã xong" || data.status === "Bỏ qua")) {
             // (1) Báo TRƯỞNG PHÒNG của chính bước vừa xong/bỏ qua (Lark DM, chạy nền).
             notifyStepCompleted(projectId, nodeId, data.status).catch((e) =>
                   console.error("[done-notify] lỗi:", e.message),
@@ -234,7 +304,7 @@ async function patchProjectNode(req, res) {
                         console.error("[start-notify] lỗi:", e.message),
                   );
             }
-      } else if (payload.status !== undefined) {
+      } else if (statusChanged) {
             // Bước RỜI trạng thái hoàn tất (vd 'Đã xong' -> 'Đang làm') -> các bước
             // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
             await revertDependentsToNotStarted(projectId, nodeId);

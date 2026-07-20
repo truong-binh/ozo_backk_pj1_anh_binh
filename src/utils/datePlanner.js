@@ -11,6 +11,17 @@ function isoLocal(d) {
   );
 }
 
+// Hôm nay theo giờ VN dạng 'YYYY-MM-DD'. Server có thể chạy ở UTC (Render) nên
+// không dùng giờ máy — dùng để tự điền NGÀY THỰC TẾ khi bước chuyển 'Đã xong'.
+function todayIsoVN() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 // Ngày lễ VN (đồng bộ với frontend). Mở rộng khi cần.
 const VN_HOLIDAYS = new Set([
   // 2025
@@ -115,4 +126,4 @@ function lateDays(detail, nodeId, dates) {
   return diff > 0 ? diff : 0;
 }
 
-module.exports = { computeAllDates, lateDays, parseLocalDate, isoLocal };
+module.exports = { computeAllDates, lateDays, parseLocalDate, isoLocal, todayIsoVN };

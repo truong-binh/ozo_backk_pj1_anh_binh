@@ -14,7 +14,7 @@ const {
   getUnsatisfiedDeps,
 } = require('../projectService');
 const { WORKFLOW_NODES, NODE_INDEX } = require('../../constants/workflowNodes');
-const { computeAllDates, lateDays, isoLocal } = require('../../utils/datePlanner');
+const { computeAllDates, lateDays, isoLocal, todayIsoVN } = require('../../utils/datePlanner');
 const { findMemberByName, listAllMembers } = require('../picMembersService');
 const { toPicArray, picText } = require('../../utils/pic');
 const {
@@ -710,6 +710,39 @@ const tools = {
         payload.status = 'Đã xong';
       }
 
+      // NGÀY THỰC TẾ: PIC thường không tự chọn (khớp luật trên web) — báo 'Đã xong'
+      // thì hệ thống tự đóng dấu ngày hôm nay. Trưởng phòng của bước vẫn sửa tay được.
+      if (!isLeaderOfDept) delete payload.actual_date;
+
+      // Bước đã kết thúc: PIC thường hết quyền sửa Ghi chú. Trưởng phòng của bước
+      // vẫn sửa được; mở lại bước trong cùng lệnh thì cho phép.
+      const nodeDone = ['Đã xong', 'Bỏ qua'].includes(node.status);
+      const reopening =
+        payload.status !== undefined && !['Đã xong', 'Bỏ qua'].includes(payload.status);
+      if (nodeDone && !isLeaderOfDept && !reopening) {
+        if (payload.notes !== undefined && (payload.notes || null) !== (node.notes || null)) {
+          return {
+            error: `Bước ${nodeCode} đã kết thúc — bạn không sửa được ghi chú nữa. Nhờ trưởng phòng, hoặc mở lại bước (đổi trạng thái) trước khi sửa.`,
+          };
+        }
+        delete payload.notes;
+      }
+
+      // Báo 'Đã xong' mà chưa có ngày thực tế -> tự điền HÔM NAY (giờ VN).
+      if (payload.status === 'Đã xong' && payload.actual_date === undefined && !node.actual_date) {
+        payload.actual_date = todayIsoVN();
+      }
+      // Mở lại bước đã xong -> xoá ngày thực tế cũ.
+      if (
+        payload.status !== undefined &&
+        payload.status !== 'Đã xong' &&
+        node.status === 'Đã xong' &&
+        payload.actual_date === undefined &&
+        node.actual_date
+      ) {
+        payload.actual_date = null;
+      }
+
       if (Object.keys(payload).length === 0) {
         return { error: 'Không có gì để cập nhật.' };
       }
@@ -730,9 +763,14 @@ const tools = {
         ? await snapshotDueDates(match.id)
         : null;
 
+      // Trạng thái có THỰC SỰ đổi lần này không (so với `node` đọc trước khi sửa)?
+      // Đặt lại đúng trạng thái cũ / chỉ sửa ghi chú -> không coi là "vừa hoàn tất".
+      const statusChanged =
+        payload.status !== undefined && payload.status !== node.status;
+
       const updated = await updateProjectNode(match.id, nodeCode, payload);
       // Bước vừa 'Đã xong' hoặc 'Bỏ qua' -> báo trưởng phòng bước này + mở khoá bước kế tiếp.
-      if (updated.status === 'Đã xong' || updated.status === 'Bỏ qua') {
+      if (statusChanged && (updated.status === 'Đã xong' || updated.status === 'Bỏ qua')) {
         // (1) Báo TRƯỞNG PHÒNG của chính bước vừa xong/bỏ qua (Lark DM, chạy nền).
         notifyStepCompleted(match.id, nodeCode, updated.status).catch((e) =>
           console.error('[done-notify] lỗi:', e.message),
@@ -744,7 +782,7 @@ const tools = {
             console.error('[start-notify] lỗi:', e.message),
           );
         }
-      } else if (payload.status !== undefined) {
+      } else if (statusChanged) {
         // Bước RỜI trạng thái hoàn tất (vd 'Đã xong' -> 'Đang làm') -> các bước
         // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
         await revertDependentsToNotStarted(match.id, nodeCode);
