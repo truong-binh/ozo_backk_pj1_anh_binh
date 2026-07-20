@@ -19,10 +19,12 @@ if (isCloudinaryConfigured) {
 }
 
 // Upload buffer lên Cloudinary, trả về URL công khai (secure_url).
-// resource_type: ẢNH -> 'image' (xem/preview được); MỌI FILE KHÁC -> 'raw'.
-// KHÔNG dùng 'auto': Cloudinary xếp PDF vào 'image', mà tài khoản mặc định BẬT
-// luật chặn phát PDF/ZIP (Settings > Security) -> link trả HTTP 401. Đường 'raw'
-// không dính luật đó nên PDF/Word/Excel tải về bình thường.
+// resource_type: ẢNH -> 'image' (xem/preview được); MỌI FILE KHÁC -> 'raw' để
+// giữ nguyên đuôi & tên file khi tải về (Word/Excel/CSV/txt chạy tốt).
+// LƯU Ý: Cloudinary chặn phát PDF/ZIP theo ĐUÔI FILE (Settings > Security >
+// Restricted media types), không theo resource_type — nên PDF vẫn trả HTTP 401
+// (x-cld-error: deny or ACL failure) cho tới khi bỏ tick PDF trong mục đó.
+// Không có cách né từ code: đổi sang đuôi lạ thì Cloudinary chặn ngay lúc upload.
 function uploadBuffer(buffer, filename, mimetype) {
   const isImage = String(mimetype || '').startsWith('image/');
   return new Promise((resolve, reject) => {
