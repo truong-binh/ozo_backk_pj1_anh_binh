@@ -18,6 +18,7 @@ const { computeAllDates, lateDays, isoLocal, todayIsoVN } = require('../../utils
 const { findMemberByName, listAllMembers } = require('../picMembersService');
 const { toPicArray, picText } = require('../../utils/pic');
 const {
+  notifyAssignment,
   notifyStepsStarted,
   notifyStepCompleted,
   snapshotDueDates,
@@ -786,6 +787,20 @@ const tools = {
         // Bước RỜI trạng thái hoàn tất (vd 'Đã xong' -> 'Đang làm') -> các bước
         // phụ thuộc nó quay về 'Chưa làm' (đệ quy xuống chuỗi).
         await revertDependentsToNotStarted(match.id, nodeCode);
+      }
+
+      // Vừa phân/đổi PIC -> báo ngay người được giao; bước RỜI 'Tạm dừng' về trạng
+      // thái đang mở cũng gửi (lúc Tạm dừng mọi DM cho PIC bị chặn — xem SILENT
+      // trong reminderService — nên đây là dịp gửi bù). Dedupe nằm trong service.
+      const resumedFromPause =
+        statusChanged &&
+        node.status === 'Tạm dừng' &&
+        updated.status !== 'Đã xong' &&
+        updated.status !== 'Bỏ qua';
+      if (payload.pic !== undefined || resumedFromPause) {
+        notifyAssignment(match.id, nodeCode).catch((e) =>
+          console.error('[assign-notify] lỗi:', e.message),
+        );
       }
 
       // Báo PIC các bước bị DỜI NGÀY DỰ KIẾN (chạy nền, sau các tác động ở trên).

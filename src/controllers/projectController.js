@@ -312,7 +312,15 @@ async function patchProjectNode(req, res) {
 
       // Vừa phân/đổi PIC -> gửi ngay thông báo "việc mới được giao" cho PIC (Lark DM).
       // Chạy nền, không chặn phản hồi; dedupe & bỏ qua nhãn vai trò nằm trong service.
-      if (payload.pic !== undefined) {
+      // Bước RỜI 'Tạm dừng' về lại trạng thái đang mở cũng gửi: lúc đang Tạm dừng mọi
+      // DM cho PIC bị chặn (xem SILENT trong reminderService), nên nếu PIC được phân
+      // trong lúc đó thì đây là dịp gửi bù. Đã gửi rồi thì dedupe chặn lại.
+      const resumedFromPause =
+            statusChanged &&
+            node.status === "Tạm dừng" &&
+            data.status !== "Đã xong" &&
+            data.status !== "Bỏ qua";
+      if (payload.pic !== undefined || resumedFromPause) {
             notifyAssignment(projectId, nodeId).catch((e) =>
                   console.error("[assign-notify] lỗi:", e.message),
             );

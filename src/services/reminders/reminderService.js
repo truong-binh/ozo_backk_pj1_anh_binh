@@ -3,6 +3,7 @@
 //                    không quét theo giờ nữa; xem notifyAssignment().
 //   - due_soon     : trước hạn ~24h (hạn = ngày mai theo giờ VN) -> nhắc 1 lần cho mỗi mốc hạn
 //   - overdue      : quá hạn -> nhắc MỖI NGÀY 1 lần cho tới khi 'Đã xong'/'Bỏ qua'
+//                    (bước 'Tạm dừng' KHÔNG nhắc — xem SILENT bên dưới)
 //   - started      : bước trước xong -> bước kế tiếp mở khoá; báo PIC bước kế tiếp.
 //   - completed    : bước vừa 'Đã xong'/'Bỏ qua' -> báo trưởng phòng của bước.
 //   - date_changed : ngày dự kiến của bước bị dời -> báo PIC bước đó (event, khi sửa bước).
@@ -19,6 +20,10 @@ const { toPicArray, picText } = require('../../utils/pic');
 
 const TZ = 'Asia/Ho_Chi_Minh';
 const DONE = new Set(['Đã xong', 'Bỏ qua']);
+// Bước KHÔNG gửi DM cho PIC: đã kết thúc, hoặc đang 'Tạm dừng' (giục người ta làm
+// việc đang bị dừng là vô nghĩa — trước đây bước Tạm dừng vẫn bị nhắc quá hạn mỗi
+// ngày, vô hạn, vì nó không bao giờ tự thoát trạng thái).
+const SILENT = new Set([...DONE, 'Tạm dừng']);
 
 function norm(s) {
   return String(s || '').trim().toLowerCase();
@@ -110,7 +115,7 @@ async function computeReminderItems() {
     for (const node of nodes) {
       const pics = toPicArray(node.pic);
       if (!pics.length) continue;
-      if (DONE.has(node.status)) continue;
+      if (SILENT.has(node.status)) continue;
 
       const due = dates[node.node_id]?.due;
       if (!due) continue;
@@ -336,7 +341,7 @@ async function notifyAssignment(projectId, nodeId) {
   if (!node) return { ok: false, reason: 'not_found' };
   const pics = toPicArray(node.pic);
   if (!pics.length) return { ok: false, reason: 'no_pic' };
-  if (DONE.has(node.status)) return { ok: false, reason: 'done' };
+  if (SILENT.has(node.status)) return { ok: false, reason: 'silent_status' };
 
   // Mỗi PIC (có liên hệ, không phải nhãn vai trò/người ngoài danh bạ) -> 1 tin.
   const contactMap = await loadPicContactMap();
@@ -398,7 +403,7 @@ async function notifyNewProjectAssignments(projectId) {
 
   const items = [];
   for (const node of nodes) {
-    if (DONE.has(node.status)) continue;
+    if (SILENT.has(node.status)) continue;
     const due = dates[node.node_id]?.due;
     const dueLabel = due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—';
     for (const pic of toPicArray(node.pic)) {
@@ -483,7 +488,7 @@ async function notifyStepsStarted(projectId, startedNodeIds) {
   for (const nid of ids) {
     const node = (nodes || []).find((n) => n.node_id === nid);
     if (!node) continue;
-    if (DONE.has(node.status)) continue; // an toàn: chỉ bước đang mở
+    if (SILENT.has(node.status)) continue; // an toàn: chỉ bước đang mở
     const due = dates[node.node_id]?.due;
     const dueLabel = due ? fmtDMY(due.getFullYear(), due.getMonth() + 1, due.getDate()) : '—';
 
@@ -602,7 +607,7 @@ async function notifyDueDateChanges(projectId, before) {
 
   const items = [];
   for (const node of nodes || []) {
-    if (DONE.has(node.status)) continue;
+    if (SILENT.has(node.status)) continue;
     const pics = toPicArray(node.pic);
     if (!pics.length) continue;
 
