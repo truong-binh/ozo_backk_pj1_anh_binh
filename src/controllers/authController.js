@@ -2,6 +2,7 @@ const {
   requestLoginCode,
   verifyLoginCode,
   verifyLoginByBotCode,
+  issueGuestToken,
   elevateToManager,
 } = require('../services/authService');
 
@@ -24,6 +25,11 @@ async function postVerifyLarkCode(req, res) {
   res.json(result);
 }
 
+// Vào chế độ "chỉ xem" (không cần mã): chỉ thấy bảng Ngày hàng về (G4).
+async function postGuest(req, res) {
+  res.json(issueGuestToken());
+}
+
 async function postElevate(req, res) {
   const { code } = req.body || {};
   const result = elevateToManager(req.user, code);
@@ -34,4 +40,11 @@ async function getMe(req, res) {
   res.json({ user: req.user });
 }
 
-module.exports = { postRequestCode, postVerifyCode, postVerifyLarkCode, postElevate, getMe };
+module.exports = {
+  postRequestCode,
+  postVerifyCode,
+  postVerifyLarkCode,
+  postGuest,
+  postElevate,
+  getMe,
+};

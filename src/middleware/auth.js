@@ -36,4 +36,21 @@ function requireManager(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireManager };
+// Khách "chỉ xem" (role='guest', vào bằng nút Chỉ xem ở trang đăng nhập) chỉ được
+// đọc ĐÚNG endpoint nuôi bảng "Ngày hàng về" (G4) ở trang Milestone. Dùng NGAY SAU
+// requireAuth khi mount /api/projects — req.path lúc đó đã bỏ tiền tố mount.
+function restrictGuest(req, res, next) {
+  if (req.user?.role !== 'guest') return next();
+  if (req.method === 'GET' && req.path === '/with-nodes') return next();
+  return res.status(403).json({ error: 'Chế độ chỉ xem: không truy cập được mục này' });
+}
+
+// Chặn hoàn toàn guest (các API không phục vụ bảng Ngày hàng về).
+function denyGuest(req, res, next) {
+  if (req.user?.role === 'guest') {
+    return res.status(403).json({ error: 'Chế độ chỉ xem: không truy cập được mục này' });
+  }
+  next();
+}
+
+module.exports = { requireAuth, requireManager, restrictGuest, denyGuest };

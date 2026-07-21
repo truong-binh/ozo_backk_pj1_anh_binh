@@ -324,8 +324,28 @@ async function verifyLoginByBotCode(rawCode) {
   };
 }
 
+// === Khách "chỉ xem" ===
+// Không cần OTP, không có dòng trong app_users (sub=0 -> chỉ dùng để ký JWT).
+// Vai trò 'guest' chỉ đọc được danh sách dự án cho bảng "Ngày hàng về" (G4) ở
+// trang Milestone; mọi API khác bị chặn ở middleware restrictGuest/denyGuest.
+function issueGuestToken() {
+  const user = { id: 0, email: null, role: 'guest', picName: null, leadDepts: [] };
+  const token = jwt.sign(
+    { sub: 0, email: null, role: 'guest', picName: null, leadDepts: [] },
+    jwtSecret,
+    { expiresIn: jwtExpiresIn },
+  );
+  return { token, user };
+}
+
 // Nâng quyền lên Quản lý bằng mã bí mật chung -> phát JWT mới role='manager'.
 function elevateToManager(currentUser, code) {
+  // Khách chỉ xem không gắn với tài khoản nào (sub=0) -> phải đăng nhập thật trước.
+  if (currentUser?.role === 'guest') {
+    const err = new Error('Chế độ chỉ xem không nâng quyền được. Vui lòng đăng nhập.');
+    err.status = 403;
+    throw err;
+  }
   if (!managerCode) {
     const err = new Error('Mã quản lý chưa được cấu hình trên máy chủ');
     err.status = 400;
@@ -380,6 +400,7 @@ module.exports = {
   verifyLoginCode,
   issueLoginCodeForOpenId,
   verifyLoginByBotCode,
+  issueGuestToken,
   elevateToManager,
   verifyToken,
   getUserById,
